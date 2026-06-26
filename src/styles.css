@@ -563,3 +563,16 @@ table.fa-tbl tr:hover td { background:#f8fafc; }
 .mention-hint { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); padding: 8px 12px 4px; }
 .mention-item { display: flex; align-items: center; gap: 9px; padding: 8px 12px; font-size: 13px; cursor: pointer; color: var(--text); }
 .mention-item.on, .mention-item:hover { background: var(--purple-100); color: var(--purple-900); }
+
+/* ── FinAnalyzer-style module filter bar ─────────────────────────────────── */
+.fa-filters { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 18px; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px 16px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+.fa-fld { display: flex; flex-direction: column; gap: 5px; }
+.fa-fld > label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: .06em; }
+.fa-fld select { min-width: 200px; padding: 8px 11px; border: 1px solid #e2e8f0; border-radius: 9px; font-size: 13px; background: #fff; color: #0f172a; }
+.fa-search { display: flex; align-items: center; gap: 7px; border: 1px solid #e2e8f0; border-radius: 9px; padding: 0 11px; background: #fff; }
+.fa-search i { color: #94a3b8; font-style: normal; font-size: 15px; }
+.fa-search input { border: none; outline: none; padding: 8px 0; font-size: 13px; width: 100%; background: transparent; color: #0f172a; }
+.fa-chip { font-size: 12px; padding: 6px 11px; border: 1px solid #e2e8f0; border-radius: 999px; cursor: pointer; color: #475569; background: #fff; }
+.fa-chip.on { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; font-weight: 600; }
+.fa-toggle { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #334155; cursor: pointer; padding-bottom: 6px; }
+.fa-toggle input { width: 15px; height: 15px; accent-color: #2563eb; }

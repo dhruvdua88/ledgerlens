@@ -1,7 +1,7 @@
 // Indian number formatting + value helpers for the result table.
 
 const looksLikeAmountCol = (name) =>
-  /amount|amt|net|total|debit|credit|balance|value|opening|closing|tax|turnover|gross|sum|paid|received|outstanding|exposure|cr_amt|dr_amt|rupees|inr/i.test(name)
+  /amount|amt|net|total|debit|credit|balance|value|opening|closing|tax|turnover|gross|sum|paid|received|outstanding|exposure|rupees|inr|\bdr\b|\bcr\b|during|\bop\b/i.test(name)
 
 export function isAmountColumn(colName, sampleValues) {
   if (!looksLikeAmountCol(colName)) return false

@@ -43,40 +43,55 @@ function classifyStatus(m) {
   if (o === c) return ['slow', 'Slow moving / no change']
   return ['active', 'Active']
 }
-function ledgerAnalytics(db) {
-  const ms = masters(db).map((m) => { const [st, lbl] = classifyStatus(m); return { ...m, status: st, statusLabel: lbl } })
-  const counts = { abnormal: 0, slow: 0, zero: 0, active: 0 }; ms.forEach((m) => counts[m.status]++)
+function ledgerAnalytics(db, { search = '', primary = 'All', status = 'All' } = {}) {
+  const allMs = masters(db).map((m) => { const [st, lbl] = classifyStatus(m); return { ...m, status: st, statusLabel: lbl } })
+  const counts = { abnormal: 0, slow: 0, zero: 0, active: 0 }; allMs.forEach((m) => counts[m.status]++)
+  const primaries = ['All', ...[...new Set(allMs.map((m) => m.primary))].filter(Boolean).sort()]
+  const sq = search.toLowerCase()
+  const ms = allMs.filter((m) =>
+    (!sq || m.name.toLowerCase().includes(sq) || (m.parent || '').toLowerCase().includes(sq)) &&
+    (primary === 'All' || m.primary === primary) &&
+    (status === 'All' || m.status === status))
+  const params = [
+    { key: 'search', type: 'search', label: 'Search', placeholder: 'Ledger or group…', value: search },
+    { key: 'primary', type: 'select', label: 'Primary group', options: primaries, value: primary },
+    { key: 'status', type: 'chips', label: 'Status', options: ['All', 'active', 'abnormal', 'slow', 'zero'], value: status },
+  ]
   const byLedger = {
     columns: ['Ledger', 'Primary group', 'Opening', 'Closing', 'Net change', 'Status'],
     rows: ms.map((m) => [m.name, m.primary, m.opening ?? 0, m.closing ?? 0, r2((m.closing || 0) - (m.opening || 0)), m.statusLabel]),
   }
   const grp = {}; for (const m of ms) { const g = (grp[m.primary] ||= { led: 0, ab: 0, sl: 0, ze: 0, net: 0 }); g.led++; if (m.status === 'abnormal') g.ab++; if (m.status === 'slow') g.sl++; if (m.status === 'zero') g.ze++; g.net += m.closing || 0 }
   const byGroup = { columns: ['Primary group', 'Ledgers', 'Abnormal', 'Slow', 'Zero', 'Net balance'], rows: Object.entries(grp).sort((a, b) => b[1].led - a[1].led).map(([g, v]) => [g, v.led, v.ab, v.sl, v.ze, r2(v.net)]) }
-  return { sections: [
-    { type: 'metrics', items: [{ l: 'Total ledgers', v: ms.length }, { l: 'Abnormal balances', v: counts.abnormal, flag: counts.abnormal > 0 }, { l: 'Slow moving', v: counts.slow }, { l: 'Zero balance', v: counts.zero }] },
+  return { params, sections: [
+    { type: 'metrics', items: [{ l: 'Total ledgers', v: allMs.length }, { l: 'Abnormal balances', v: counts.abnormal, flag: counts.abnormal > 0 }, { l: 'Slow moving', v: counts.slow }, { l: 'Zero balance', v: counts.zero }] },
     { type: 'table', title: 'By ledger', ...byLedger },
     { type: 'table', title: 'By primary group', ...byGroup },
   ] }
 }
 
 // ── Voucher Book View ────────────────────────────────────────────────────
-function voucherBook(db, { vtype } = {}) {
+function voucherBook(db, { vtype = 'All', search = '' } = {}) {
   const ls = lines(db)
   const types = ['All', ...[...new Set(ls.map((l) => l.vtype))].filter(Boolean).sort()]
   const filt = vtype && vtype !== 'All' ? ls.filter((l) => l.vtype === vtype) : ls
   const vs = groupVouchers(filt)
+  const sq = search.toLowerCase()
   const rows = []
   let tDr = 0, tCr = 0, entries = 0
   for (const [, legs] of vs) {
     const d = legs.reduce((s, l) => s + dr(l.amount), 0), c = legs.reduce((s, l) => s + cr(l.amount), 0)
+    const party = resolveParty(legs), narr = legs.find((l) => l.narration)?.narration || ''
+    if (sq && !`${legs[0].vno} ${legs[0].vtype} ${party} ${narr}`.toLowerCase().includes(sq)) continue
     tDr += d; tCr += c; entries += legs.length
-    const narr = legs.find((l) => l.narration)?.narration || ''
-    rows.push([legs[0].date, legs[0].vtype, legs[0].vno, resolveParty(legs), narr, r2(d), r2(c), legs.length])
+    rows.push([legs[0].date, legs[0].vtype, legs[0].vno, party, narr, r2(d), r2(c), legs.length])
   }
   rows.sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
-  return { params: [{ key: 'vtype', label: 'Voucher type', options: types, value: vtype || 'All' }],
-    sections: [
-      { type: 'metrics', items: [{ l: 'Vouchers', v: vs.size }, { l: 'Entries', v: entries }, { l: 'Total Dr', v: r2(tDr), money: true }, { l: 'Total Cr', v: r2(tCr), money: true }] },
+  return { params: [
+    { key: 'search', type: 'search', label: 'Search', placeholder: 'Voucher, party, narration…', value: search },
+    { key: 'vtype', type: 'select', label: 'Voucher type', options: types, value: vtype },
+  ], sections: [
+      { type: 'metrics', items: [{ l: 'Vouchers', v: rows.length }, { l: 'Entries', v: entries }, { l: 'Total Dr', v: r2(tDr), money: true }, { l: 'Total Cr', v: r2(tCr), money: true }] },
       { type: 'table', title: 'Voucher book', columns: ['Date', 'Type', 'Voucher', 'Party', 'Narration', 'Dr', 'Cr', 'Lines'], rows: rows.slice(0, 2000) },
     ] }
 }
@@ -100,7 +115,7 @@ function ledgerStatement(db, { ledger } = {}) {
   const periodNet = r2(bal - opening)
   const refClosing = m?.closing ?? null
   const reconDiff = refClosing == null ? null : r2(bal - refClosing)
-  return { params: [{ key: 'ledger', label: 'Ledger', options: names, value: sel }],
+  return { params: [{ key: 'ledger', type: 'select', label: 'Ledger', options: names, value: sel }],
     sections: [
       { type: 'metrics', items: [
         { l: 'Opening', v: r2(opening), money: true }, { l: 'Period net', v: periodNet, money: true },
@@ -124,10 +139,11 @@ function bucketOf(l) {
   return 'Others'
 }
 const BUCKETS = ['Sales', 'Purchase', 'Expenses', 'TDS', 'GST', 'RCM', 'Bank', 'Others']
-function partyMatrix(db, { primary } = {}) {
+function partyMatrix(db, { primary, search = '' } = {}) {
   const ls = lines(db)
   const primaries = [...new Set(ls.map((l) => l.primary))].filter(Boolean).sort()
   const eff = primary || primaries.find((p) => /debtor|creditor/i.test(p)) || primaries[0]
+  const sq = search.toLowerCase()
   const vs = groupVouchers(ls)
   const parties = {} // name -> {buckets, vch}
   for (const [, legs] of vs) {
@@ -142,13 +158,15 @@ function partyMatrix(db, { primary } = {}) {
       for (const b of BUCKETS) row.b[b] += (counter[b] || 0) * share
     }
   }
-  const rows = Object.entries(parties).map(([p, v]) => {
+  const rows = Object.entries(parties).filter(([p]) => !sq || p.toLowerCase().includes(sq)).map(([p, v]) => {
     const cells = BUCKETS.map((b) => r2(v.b[b]))
     const tdsPct = Math.abs(v.b.Expenses) > 0 ? r2(Math.abs(v.b.TDS) / Math.abs(v.b.Expenses) * 100) : 0
     return [p, v.vch, ...cells, tdsPct]
   }).sort((a, b) => Math.abs(b[2] + b[3] + b[4]) - Math.abs(a[2] + a[3] + a[4]))
-  return { params: [{ key: 'primary', label: 'Primary group', options: primaries, value: eff }],
-    sections: [
+  return { params: [
+    { key: 'search', type: 'search', label: 'Search', placeholder: 'Party…', value: search },
+    { key: 'primary', type: 'select', label: 'Primary group', options: primaries, value: eff },
+  ], sections: [
       { type: 'note', text: `Each voucher's counter-ledger amounts are pro-rata apportioned to the ${eff} parties on it, bucketed into Sales/Purchase/Expenses/TDS/GST/RCM/Bank/Others.` },
       { type: 'metrics', items: [{ l: `${eff} parties`, v: rows.length }, { l: 'Vouchers scanned', v: vs.size }] },
       { type: 'table', title: `Party matrix — ${eff}`, columns: ['Party', 'Vch', ...BUCKETS, 'TDS %'], rows },
@@ -157,8 +175,9 @@ function partyMatrix(db, { primary } = {}) {
 
 // ── Related Party (RPT) Analysis ─────────────────────────────────────────
 const RPT_KEYWORDS = ['director', 'directors remuneration', 'managerial remuneration', 'kmp', 'promoter', 'subsidiary', 'holding', 'associate', 'joint venture', 'related party', 'partner', 'proprietor']
-function relatedParty(db, params, ctx) {
+function relatedParty(db, { search = '', flag = 'All' } = {}, ctx) {
   const ls = lines(db)
+  const sq = search.toLowerCase()
   const tagged = new Set((ctx?.relatedLedgers || []).map((s) => s))
   // auto-suggest by keyword
   const suggested = new Set()
@@ -182,20 +201,25 @@ function relatedParty(db, params, ctx) {
     }
   }
   const ms = masters(db)
-  const partyRows = Object.entries(byParty).map(([p, v]) => { const m = ms.find((x) => x.name === p); return [p, v.vch, r2(v.dr + v.cr), r2(v.dr), r2(v.cr), m?.closing != null ? r2(m.closing) : ''] }).sort((a, b) => b[2] - a[2])
+  const partyRows = Object.entries(byParty).filter(([p]) => !sq || p.toLowerCase().includes(sq)).map(([p, v]) => { const m = ms.find((x) => x.name === p); return [p, v.vch, r2(v.dr + v.cr), r2(v.dr), r2(v.cr), m?.closing != null ? r2(m.closing) : ''] }).sort((a, b) => b[2] - a[2])
+  const findRows = findings.filter((f) => (!sq || f[1].toLowerCase().includes(sq)) && (flag === 'All' || f[5].includes(flag)))
   const vol = partyRows.reduce((s, r) => s + r[2], 0)
-  return { sections: [
+  return { params: [
+    { key: 'search', type: 'search', label: 'Search party', placeholder: 'Party…', value: search },
+    { key: 'flag', type: 'chips', label: 'Findings', options: ['All', 'Year-end', 'Round amount', 'Material', 'Journal'], value: flag },
+  ], sections: [
     { type: 'note', text: `Related parties = your custom "related" group${tagged.size ? '' : ' (none defined — using auto-suggested by name: director/KMP/subsidiary/holding/associate/etc.)'}. Tag precisely via Groups for AS-18 / Sec-188 disclosure.` },
-    { type: 'metrics', items: [{ l: 'Related parties', v: partyRows.length }, { l: 'Aggregate volume', v: r2(vol), money: true }, { l: 'Audit findings', v: findings.length, flag: findings.length > 0 }] },
+    { type: 'metrics', items: [{ l: 'Related parties', v: partyRows.length }, { l: 'Aggregate volume', v: r2(vol), money: true }, { l: 'Audit findings', v: findRows.length, flag: findRows.length > 0 }] },
     { type: 'table', title: 'By party', columns: ['Party', 'Vch', 'Volume', 'Debits', 'Credits', 'Closing'], rows: partyRows },
-    { type: 'table', title: 'Audit findings', columns: ['Date', 'Party', 'Voucher', 'Type', 'Amount', 'Flags', 'Narration'], rows: findings.slice(0, 500) },
+    { type: 'table', title: 'Audit findings', columns: ['Date', 'Party', 'Voucher', 'Type', 'Amount', 'Flags', 'Narration'], rows: findRows.slice(0, 500) },
   ] }
 }
 
 // ── Trial Balance Analysis (opening/during/closing + recon + balance check)
 function classifyActivity(o, d, c, tol) { const ho = Math.abs(o) > tol, hm = d > tol, hc = Math.abs(c) > tol; if (!ho && !hm && !hc) return 'never-used'; if (!ho && hm) return 'new'; if (ho && !hm && hc) return 'dormant'; if (ho && hm && !hc) return 'closed'; return 'active' }
-function trialBalance(db) {
+function trialBalance(db, { search = '', primary = 'All', activity = 'All', reconOnly = false } = {}) {
   const tol = 0.5
+  const sq = search.toLowerCase()
   const mv = {} // ledger -> {dr,cr} during
   for (const l of lines(db)) { const e = (mv[l.ledger] ||= { dr: 0, cr: 0 }); e.dr += dr(l.amount); e.cr += cr(l.amount) }
   const ms = masters(db)
@@ -210,9 +234,20 @@ function trialBalance(db) {
     rows.push([m.name, m.primary, a, m.closing != null ? (Math.abs(delta) <= tol ? 'PASS' : `FAIL Δ${r2(delta)}`) : '—', r2(dr(o)), r2(cr(o)), r2(d.dr || 0), r2(d.cr || 0), r2(dr(c)), r2(cr(c))])
   }
   rows.sort((a, b) => (Math.abs(b[8] - b[9])) - (Math.abs(a[8] - a[9])))
+  const primaries = ['All', ...[...new Set(ms.map((m) => m.primary))].filter(Boolean).sort()]
+  const dispRows = rows.filter((r) =>
+    (!sq || `${r[0]} ${r[1]}`.toLowerCase().includes(sq)) &&
+    (primary === 'All' || r[1] === primary) &&
+    (activity === 'All' || r[2] === activity) &&
+    (!reconOnly || String(r[3]).startsWith('FAIL')))
   const byGroup = {}; for (const m of ms) { const d = mv[m.name] || { dr: 0, cr: 0 }; const g = (byGroup[m.primary] ||= { led: 0, dDr: 0, dCr: 0, cNet: 0 }); g.led++; g.dDr += d.dr || 0; g.dCr += d.cr || 0; g.cNet += (m.closing || 0) }
   const grpRows = Object.entries(byGroup).sort((a, b) => Math.abs(b[1].cNet) - Math.abs(a[1].cNet)).map(([g, v]) => [g, v.led, r2(v.dDr), r2(v.dCr), r2(v.cNet)])
-  return { sections: [
+  return { params: [
+    { key: 'search', type: 'search', label: 'Search', placeholder: 'Ledger or group…', value: search },
+    { key: 'primary', type: 'select', label: 'Primary group', options: primaries, value: primary },
+    { key: 'activity', type: 'chips', label: 'Activity', options: ['All', 'active', 'dormant', 'new', 'closed', 'never-used'], value: activity },
+    { key: 'reconOnly', type: 'toggle', label: 'Recon failures only', value: reconOnly },
+  ], sections: [
     { type: 'metrics', items: [
       { l: 'During Dr', v: r2(dDr), money: true }, { l: 'During Cr', v: r2(dCr), money: true },
       { l: 'During Δ', v: r2(dDr - dCr), money: true, flag: Math.abs(dDr - dCr) > tol },
@@ -220,7 +255,7 @@ function trialBalance(db) {
     ] },
     { type: 'note', text: `Activity: ${Object.entries(act).map(([k, v]) => `${k} ${v}`).join(' · ')}. Reconciliation = opening + during = master closing (tolerance ₹0.50).` },
     { type: 'table', title: 'By primary group', columns: ['Group', 'Ledgers', 'During Dr', 'During Cr', 'Closing net'], rows: grpRows },
-    { type: 'table', title: 'By ledger (opening / during / closing)', columns: ['Ledger', 'Group', 'Activity', 'Recon', 'Op Dr', 'Op Cr', 'Dur Dr', 'Dur Cr', 'Cl Dr', 'Cl Cr'], rows },
+    { type: 'table', title: 'By ledger (opening / during / closing)', columns: ['Ledger', 'Group', 'Activity', 'Recon', 'Op Dr', 'Op Cr', 'Dur Dr', 'Dur Cr', 'Cl Dr', 'Cl Cr'], rows: dispRows },
     ...(fails.length ? [{ type: 'table', title: `Reconciliation failures (${fails.length})`, columns: ['Ledger', 'Group', 'Opening', 'During net', 'Calc closing', 'Master closing', 'Delta'], rows: fails }] : []),
   ] }
 }

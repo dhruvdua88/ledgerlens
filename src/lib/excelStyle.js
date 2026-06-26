@@ -11,7 +11,7 @@ const P = {
 const NUMFMT_MONEY = '_(* ##,##,##,##0.00_);_(* (##,##,##,##0.00);_(* "Nil"_)'
 const NUMFMT_INT = '##,##,##,##0;[Red](##,##,##,##0);"-"'
 
-const isMoneyName = (n) => /amount|amt|net|total|debit|credit|balance|value|turnover|gross|opening|closing|tax|paid|received|exposure|₹/i.test(String(n))
+const isMoneyName = (n) => /amount|amt|net|total|debit|credit|balance|value|turnover|gross|opening|closing|tax|paid|received|exposure|₹|\bdr\b|\bcr\b|during|\bop\b/i.test(String(n))
 const toNum = (v) => { if (typeof v === 'number') return v; const n = parseFloat(String(v).replace(/,/g, '')); return isNaN(n) ? null : n }
 
 // classify each column: 'money' | 'int' | 'text'

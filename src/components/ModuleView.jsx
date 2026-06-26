@@ -67,16 +67,34 @@ export default function ModuleView({ db, module, ctx }) {
       </div>
 
       {!!out.params?.length && (
-        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 18 }}>
-          {out.params.map((p) => (
-            <label key={p.key} style={{ fontSize: 13, color: '#475569', fontWeight: 600, display: 'flex', flexDirection: 'column', gap: 5 }}>
-              {p.label}
-              <select value={params[p.key] ?? p.value} onChange={(e) => setParams((s) => ({ ...s, [p.key]: e.target.value }))}
-                style={{ minWidth: 260, padding: '8px 11px', border: '1px solid #e2e8f0', borderRadius: 10, fontSize: 13 }}>
-                {p.options.map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
-            </label>
-          ))}
+        <div className="fa-filters">
+          {out.params.map((p) => {
+            const val = params[p.key] ?? p.value
+            const upd = (v) => setParams((s) => ({ ...s, [p.key]: v }))
+            if (p.type === 'search') return (
+              <div key={p.key} className="fa-fld" style={{ flex: '1 1 220px' }}>
+                <label>{p.label}</label>
+                <div className="fa-search"><i>⌕</i><input value={val || ''} placeholder={p.placeholder || 'Search…'} onChange={(e) => upd(e.target.value)} /></div>
+              </div>
+            )
+            if (p.type === 'toggle') return (
+              <label key={p.key} className="fa-toggle"><input type="checkbox" checked={!!val} onChange={(e) => upd(e.target.checked)} />{p.label}</label>
+            )
+            if (p.type === 'chips') return (
+              <div key={p.key} className="fa-fld">
+                <label>{p.label}</label>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {p.options.map((o) => <span key={o} className={`fa-chip ${val === o ? 'on' : ''}`} onClick={() => upd(o)}>{o}</span>)}
+                </div>
+              </div>
+            )
+            return ( // select
+              <div key={p.key} className="fa-fld">
+                <label>{p.label}</label>
+                <select value={val} onChange={(e) => upd(e.target.value)}>{p.options.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+              </div>
+            )
+          })}
         </div>
       )}
 
