@@ -260,29 +260,104 @@ function trialBalance(db, { search = '', primary = 'All', activity = 'All', reco
   ] }
 }
 
-// ── Balance Sheet (Schedule III) — NOT on this branch; kept as LedgerLens-native
-const SCH3 = [
-  ["Shareholders' funds", 'EQ', ['Capital Account', 'Reserves & Surplus']],
-  ['Non-current liabilities', 'EQ', ['Loans (Liability)', 'Secured Loans', 'Unsecured Loans']],
-  ['Current liabilities', 'EQ', ['Current Liabilities', 'Sundry Creditors', 'Duties & Taxes', 'Provisions']],
-  ['Fixed assets', 'AS', ['Fixed Assets']],
-  ['Investments', 'AS', ['Investments']],
-  ['Current assets', 'AS', ['Current Assets', 'Sundry Debtors', 'Cash-in-Hand', 'Bank Accounts', 'Stock-in-Hand', 'Bank OD A/c', 'Deposits (Asset)', 'Loans & Advances (Asset)']],
-]
+// ── Balance Sheet (Schedule III) — ported from FinAnalyzer services/balanceSheet.ts
+// Tally closing sign: liability/equity/income = credit (+), asset/expense = debit (-).
+// So equity/liab lines use +closing; asset lines NEGATE closing to show positive.
 function balanceSheet(db) {
   const ms = masters(db)
-  const map = {}; for (const m of ms) if (m.closing != null) map[m.primary] = (map[m.primary] || 0) + m.closing
-  const known = new Set(SCH3.flatMap((x) => x[2]))
-  const buckets = SCH3.map(([name, side, gs]) => ({ name, side, v: r2(gs.reduce((s, g) => s + (map[g] || 0), 0)) }))
-  const other = r2(Object.entries(map).filter(([g]) => !known.has(g)).reduce((s, [, v]) => s + v, 0))
-  const eq = buckets.filter((b) => b.side === 'EQ'), as = buckets.filter((b) => b.side === 'AS')
-  const sEq = eq.reduce((s, b) => s + Math.abs(b.v), 0), sAs = as.reduce((s, b) => s + Math.abs(b.v), 0)
+  const inGroup = (g) => ms.filter((m) => m.primary === g)
+  const sumC = (g) => inGroup(g).reduce((s, m) => s + (m.closing || 0), 0)
+  const sumO = (g) => inGroup(g).reduce((s, m) => s + (m.opening || 0), 0)
+  const has = (n, s) => n.toLowerCase().includes(s)
+
+  // P&L (for current-year profit folded into Reserves) — voucher-backed P&L groups
+  const revenueOps = sumC('Sales Accounts') + sumC('Direct Incomes')
+  const otherInc = sumC('Indirect Incomes')
+  const purchases = -sumC('Purchase Accounts')
+  const directExp = -sumC('Direct Expenses')
+  const indirectExp = -sumC('Indirect Expenses')
+  const closingStock = -sumC('Stock-in-hand')
+  const openingStock = -sumO('Stock-in-hand')
+  const changesInv = openingStock - closingStock
+  const totalExp = purchases + directExp + indirectExp + changesInv
+  const profitBeforeTax = (revenueOps + otherInc) - totalExp
+
+  // Equity
+  const shareCapital = inGroup('Capital Account').filter((l) => !has(l.name, 'reserve') && !has(l.name, 'profit')).reduce((s, l) => s + (l.closing || 0), 0)
+  const pnlOpening = sumO('Profit & Loss A/c')
+  const reserves = sumC('Reserves & Surplus') + inGroup('Capital Account').filter((l) => has(l.name, 'reserve')).reduce((s, l) => s + (l.closing || 0), 0) + pnlOpening + profitBeforeTax
+  const totalEquity = shareCapital + reserves
+  // Non-current liabilities
+  const longTermBorrow = sumC('Secured Loans') + sumC('Unsecured Loans') + sumC('Loans (Liability)')
+  const totalNCL = longTermBorrow
+  // Current liabilities
+  const bankOdInBank = inGroup('Bank Accounts').filter((l) => (l.closing || 0) > 0).reduce((s, l) => s + l.closing, 0)
+  const shortTermBorrow = sumC('Bank OD A/c') + bankOdInBank
+  const tradePayables = sumC('Sundry Creditors')
+  const dutiesNet = sumC('Duties & Taxes')
+  const otherCL = sumC('Current Liabilities') + sumC('Branch / Divisions') + sumC('Suspense A/c')
+  const provisions = sumC('Provisions')
+  const totalCL = shortTermBorrow + tradePayables + dutiesNet + otherCL + provisions
+  // Assets (negate closing)
+  let grossFA = 0, deprFA = 0
+  for (const l of inGroup('Fixed Assets')) { if (has(l.name, 'depreciation') || has(l.name, 'accumulated')) deprFA += (l.closing || 0); else grossFA += -(l.closing || 0) }
+  const netFixedAssets = grossFA - deprFA
+  const nonCurrentInv = -sumC('Investments')
+  const longTermLA = -sumC('Deposits (Asset)') + -sumC('Loans & Advances (Asset)')
+  const otherNCA = -sumC('Misc. Expenses (ASSET)')
+  const totalNCA = netFixedAssets + nonCurrentInv + longTermLA + otherNCA
+  const tradeReceiv = -sumC('Sundry Debtors')
+  const cashBank = -sumC('Cash-in-hand') + inGroup('Bank Accounts').filter((l) => (l.closing || 0) < 0).reduce((s, l) => s + -l.closing, 0)
+  const otherCA = -sumC('Current Assets')
+  const totalCA = closingStock + tradeReceiv + cashBank + otherCA
+
+  const totalEL = totalEquity + totalNCL + totalCL
+  const totalAssets = totalNCA + totalCA
+  const plug = totalAssets - totalEL // shown on face so the BS always closes
+
+  const L = (label, v, kind, indent = 0) => [`${' '.repeat(indent)}${label}`, kind === 'header' ? '' : r2(v)]
+  const rows = [
+    L('EQUITY AND LIABILITIES', 0, 'header'),
+    L("Shareholders' Funds", 0, 'header', 1),
+    L('Share Capital', shareCapital, 'line', 2),
+    L('Reserves & Surplus', reserves, 'line', 2),
+    L("Total Shareholders' Funds", totalEquity, 'subtotal', 1),
+    L('Non-Current Liabilities', 0, 'header', 1),
+    L('Long-Term Borrowings', longTermBorrow, 'line', 2),
+    L('Total Non-Current Liabilities', totalNCL, 'subtotal', 1),
+    L('Current Liabilities', 0, 'header', 1),
+    L('Short-Term Borrowings', shortTermBorrow, 'line', 2),
+    L('Trade Payables', tradePayables, 'line', 2),
+    L('Duties & Taxes (Net)', dutiesNet, 'line', 2),
+    L('Other Current Liabilities', otherCL, 'line', 2),
+    L('Short-Term Provisions', provisions, 'line', 2),
+    L('Total Current Liabilities', totalCL, 'subtotal', 1),
+    L('Opening Balance Difference (auto-balance)', plug, 'plug', 1),
+    L('TOTAL EQUITY & LIABILITIES', totalEL + plug, 'total'),
+    L('ASSETS', 0, 'header'),
+    L('Non-Current Assets', 0, 'header', 1),
+    L('Fixed Assets (Net)', netFixedAssets, 'line', 2),
+    L('Non-Current Investments', nonCurrentInv, 'line', 2),
+    L('Long-Term Loans & Advances', longTermLA, 'line', 2),
+    L('Other Non-Current Assets', otherNCA, 'line', 2),
+    L('Total Non-Current Assets', totalNCA, 'subtotal', 1),
+    L('Current Assets', 0, 'header', 1),
+    L('Inventories', closingStock, 'line', 2),
+    L('Trade Receivables', tradeReceiv, 'line', 2),
+    L('Cash & Cash Equivalents', cashBank, 'line', 2),
+    L('Other Current Assets', otherCA, 'line', 2),
+    L('Total Current Assets', totalCA, 'subtotal', 1),
+    L('TOTAL ASSETS', totalAssets, 'total'),
+  ]
   return { sections: [
-    { type: 'note', text: 'Ledger closing balances mapped to Schedule III heads. (This module is LedgerLens-native — Schedule III is not on the FinAnalyzer branch.) Verify the tie-out before relying.' },
-    { type: 'metrics', items: [{ l: 'Equity & liabilities', v: r2(sEq), money: true }, { l: 'Assets', v: r2(sAs), money: true }, { l: 'Difference', v: r2(sEq - sAs), money: true, flag: Math.abs(sEq - sAs) > 1 }] },
-    { type: 'table', title: 'Equity & liabilities', columns: ['Head', 'Amount'], rows: eq.map((b) => [b.name, Math.abs(b.v)]) },
-    { type: 'table', title: 'Assets', columns: ['Head', 'Amount'], rows: as.map((b) => [b.name, Math.abs(b.v)]) },
-    ...(Math.abs(other) > 1 ? [{ type: 'table', title: 'Unmapped groups (review)', columns: ['Note', 'Amount'], rows: [['Groups not mapped to Schedule III', other]] }] : []),
+    { type: 'note', text: 'Schedule III balance sheet from ledger closing balances (FinAnalyzer engine). Current-year voucher-backed profit is folded into Reserves; any residual sits in the auto-balance plug so the statement always closes.' },
+    { type: 'metrics', items: [
+      { l: 'Total equity & liabilities', v: r2(totalEL + plug), money: true },
+      { l: 'Total assets', v: r2(totalAssets), money: true },
+      { l: 'Profit before tax', v: r2(profitBeforeTax), money: true },
+      { l: 'Auto-balance plug', v: r2(plug), money: true, flag: Math.abs(plug) > Math.abs(totalAssets) * 0.05 },
+    ] },
+    { type: 'table', title: 'Balance Sheet (Schedule III)', columns: ['Particulars', 'Amount (₹)'], rows },
   ] }
 }
 
