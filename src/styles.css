@@ -105,7 +105,12 @@ body {
   display: flex; flex-direction: column;
   padding: 16px 0 8px;
   border-right: 1px solid #0d0b15;
+  overflow-y: auto; overflow-x: hidden;
+  scrollbar-width: thin; scrollbar-color: #3a3750 transparent;
 }
+.side::-webkit-scrollbar { width: 8px; }
+.side::-webkit-scrollbar-thumb { background: #322f45; border-radius: 8px; }
+.side::-webkit-scrollbar-track { background: transparent; }
 .side .brand {
   padding: 2px 16px 16px;
   display: flex; align-items: center; gap: 10px;

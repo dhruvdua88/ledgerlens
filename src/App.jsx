@@ -18,6 +18,12 @@ import { resolveAssistant, reformat, REFORMAT_MODES } from './lib/assistant.js'
 import { improveQuestion } from './lib/improve.js'
 import ModuleView from './components/ModuleView.jsx'
 import { MODULES, moduleById } from './lib/modules.js'
+import PandasTab from './components/PandasTab.jsx'
+import { runQuery } from './lib/db.js'
+import { chat } from './lib/llm.js'
+import { buildPyMessages, extractPyCode } from './lib/pyprompt.js'
+import { unmaskPy } from './lib/mask.js'
+import { runPython } from './lib/pyodide.js'
 
 const LS = {
   key: 'll_api_key', cost: 'll_cost_log', rate: 'll_usdinr', provider: 'll_provider',
@@ -67,7 +73,7 @@ function providerConfig(s) {
 }
 
 const TITLES = {
-  chat: 'Chat with data', groups: 'Groups', manual: 'Manual mode',
+  chat: 'Chat with data', python: 'Python (Pandas) studio', groups: 'Groups', manual: 'Manual mode',
   profile: 'Profile', privacy: 'Privacy', cost: 'API cost', settings: 'Settings',
 }
 
@@ -147,6 +153,38 @@ export default function App() {
     })
   }, [settings, catalog, groups])
 
+  // NL -> pandas code -> run in Pyodide -> downloadable file. Code model = active provider.
+  const onPython = useCallback(async (question, format, onStatus) => {
+    const provider = providerConfig(settings)
+    const recs = (sql, keys) => { const r = runQuery(db, sql); const ix = {}; r.columns.forEach((c, i) => (ix[c] = i)); return r.rows.map((row) => { const o = {}; keys.forEach((k) => (o[k] = row[ix[k]])); return o }) }
+    const records = recs(`SELECT voucher_guid,voucher_date,voucher_type,voucher_number,party_name,ledger_name,amount,ledger_parent,ledger_primary_group FROM daybook_accounting_lines`,
+      ['voucher_guid', 'voucher_date', 'voucher_type', 'voucher_number', 'party_name', 'ledger_name', 'amount', 'ledger_parent', 'ledger_primary_group'])
+    const ledgers = recs(`SELECT l.name AS name, l.parent AS parent, g.primary_group AS primary_group, l.opening_balance AS opening, l.closing_balance AS closing FROM mst_ledger l LEFT JOIN mst_group g ON l.parent = g.name`,
+      ['name', 'parent', 'primary_group', 'opening', 'closing'])
+
+    // user-defined groups → { KEY: [ledger names] }; member names stay local, only KEYs are sent
+    const groupsMap = {}, groupNames = []
+    for (const g of groups) {
+      const key = g.name.toUpperCase().replace(/\s+/g, '_')
+      const led = catalog ? resolveGroup(g, catalog).ledgers : []
+      if (led.length) { groupsMap[key] = led; groupNames.push(key) }
+    }
+    const { messages: msgs } = buildPyMessages(mask, question, format, groupNames)
+
+    onStatus?.('Generating Python…')
+    let { content } = await chat({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: provider.model, messages: msgs })
+    let code = unmaskPy(extractPyCode(content), mask)
+    let out = await runPython({ code, records, ledgers, groupsMap, format }, onStatus)
+    if (out.error) { // one self-correct retry: feed the Python error back
+      onStatus?.('Fixing the code…')
+      const fix = await chat({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: provider.model,
+        messages: [...msgs, { role: 'assistant', content: extractPyCode(content) }, { role: 'user', content: `That code failed with:\n${out.error}\nReturn corrected Python only — output to OUTPUT_PATH. Code only.` }] })
+      code = unmaskPy(extractPyCode(fix.content), mask)
+      out = await runPython({ code, records, ledgers, groupsMap, format }, onStatus)
+    }
+    return { code, ...out }
+  }, [settings, mask, db, groups, catalog])
+
   // Reformat a result into prose (summary / email / explain / free-text) via the Assistant model.
   const onReformat = useCallback(async (sourceTurn, modeOrText) => {
     const a = await resolveAssistant(settings)
@@ -221,6 +259,7 @@ export default function App() {
 
         <div className="sec">Ask</div>
         <Nav id="chat" label="Chat with data" />
+        <Nav id="python" label="Python analysis" />
         <Nav id="manual" label="Manual mode" />
 
         <div className="sec">Groups</div>
@@ -273,6 +312,7 @@ export default function App() {
         </div>
 
         {tab === 'chat' && <ChatPanel ready={ready} history={history} model={activeModel} rate={settings.rate} free={settings.provider === 'local'} groups={groups} onAsk={onAsk} onReformat={onReformat} onImprove={onImprove} onSaveQuery={saveQuery} onClearChat={clearChat} onDeleteTurn={deleteTurn} pending={pending} onConsumePending={() => setPending(null)} />}
+        {tab === 'python' && <PandasTab ready={ready} onPython={onPython} />}
         {tab === 'manual' && <ManualTab db={db} schema={schema} mask={mask} catalog={catalog} groups={groups} />}
         {tab === 'groups' && <GroupManager catalog={catalog} groups={groups} onSave={upsertGroup} onDelete={deleteGroup} />}
         {tab === 'profile' && <ProfileTab groups={groups} savedQueries={savedQueries} prefs={settings} company={company} onImported={onProfileImported} onDeleteQuery={deleteQuery} onRunQuery={runSavedQuery} />}

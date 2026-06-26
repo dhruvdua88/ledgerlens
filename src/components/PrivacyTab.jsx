@@ -25,6 +25,20 @@ export default function PrivacyTab({ schema, mask, catalog, groups }) {
           <div className="metric"><div className="l">Real names sent</div><div className="v" style={{ color: 'var(--green)' }}>0</div></div>
         </div>
 
+        <div style={{ border: '0.5px solid var(--border)', borderRadius: 10, overflow: 'hidden', marginBottom: 18 }}>
+          {[
+            ['SQL chat', 'Runs SQL in-browser (sql.js). Sends schema + masked question. Result rows stay on device.'],
+            ['Python (Pandas) studio', 'Runs pandas in-browser (Pyodide, sandboxed — no network). Sends column schema + masked question + your group NAMES only. The DataFrame and group members never leave.'],
+            ['Core-audit modules', 'Pure SQL on the local DB. Nothing is sent at all.'],
+            ['Assistant (summaries/emails)', 'On-device (Chrome Nano / local). Cloud writer is opt-in and warns before sending result content.'],
+          ].map(([k, v]) => (
+            <div key={k} style={{ display: 'flex', gap: 12, padding: '9px 12px', borderTop: '0.5px solid var(--border)', fontSize: 12.5 }}>
+              <span style={{ minWidth: 170, fontWeight: 500 }}>{k}</span>
+              <span style={{ color: 'var(--text-2)' }}>{v}</span>
+            </div>
+          ))}
+        </div>
+
         <div className="field">
           <label>Try a question — see how it gets masked before sending</label>
           <input value={q} onChange={(e) => setQ(e.target.value)} />

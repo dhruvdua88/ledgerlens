@@ -93,6 +93,16 @@ export function unmaskSql(sql, mask) {
   })
 }
 
+// Unmask tokens inside generated Python code — escape for Python string literals
+// (works whether the model used single or double quotes around the name).
+export function unmaskPy(code, mask) {
+  return code.replace(/@@[LPS]\d+@@/g, (tok) => {
+    const real = mask.rev.get(tok)
+    if (real == null) return tok
+    return real.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"')
+  })
+}
+
 // Audit helper: what bytes actually leave the device for a given payload.
 export function leakReport(mask) {
   return {
