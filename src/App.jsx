@@ -28,8 +28,13 @@ const LS = {
 
 function loadSettings() {
   const num = (k, d) => { const v = Number(localStorage.getItem(k)); return Number.isFinite(v) && v > 0 ? v : d }
+  // normalise any stale/unknown values (e.g. an old provider name) to a valid one
+  let provider = localStorage.getItem(LS.provider) || DEFAULT_PROVIDER
+  if (!PROVIDERS[provider]) provider = DEFAULT_PROVIDER
+  let assistant = localStorage.getItem(LS.assistant) || 'auto'
+  if (!['auto', 'local', 'cloud'].includes(assistant)) assistant = 'auto'
   return {
-    provider: localStorage.getItem(LS.provider) || DEFAULT_PROVIDER,
+    provider,
     apiKey: localStorage.getItem(LS.key) || '',
     cloudBaseUrl: localStorage.getItem(LS.cloudBase) || '',
     cloudModel: localStorage.getItem(LS.cloudModel) || '',
@@ -38,7 +43,7 @@ function loadSettings() {
     localBaseUrl: localStorage.getItem(LS.localBase) || PROVIDERS.local.baseUrl,
     localModel: localStorage.getItem(LS.localModel) || DEFAULT_LOCAL_MODEL,
     rate: num(LS.rate, DEFAULT_USDINR),
-    assistant: localStorage.getItem(LS.assistant) || 'auto', // auto = Chrome Nano -> local
+    assistant, // auto = Chrome Nano -> local
     assistantLocalModel: localStorage.getItem(LS.assistantModel) || 'qwen2.5:3b',
   }
 }

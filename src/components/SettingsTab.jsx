@@ -29,7 +29,7 @@ export default function SettingsTab({ settings, onSave }) {
               </span>
             ))}
           </div>
-          <p className="muted" style={{ margin: '8px 0 0' }}>{PROVIDERS[s.provider].privacy}</p>
+          <p className="muted" style={{ margin: '8px 0 0' }}>{(PROVIDERS[s.provider] || PROVIDERS.cloud).privacy}</p>
         </div>
 
         {!isLocal && (
