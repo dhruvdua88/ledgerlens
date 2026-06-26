@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# client accounting data — never commit (privacy)
+*.sqlite
+*.db
+sample_data/
+public/sample_data/
+
+# local profiles / exports
+*.llprofile.json
+
+# decks / screenshots — may embed real client figures (keep off GitHub)
+deck_assets/
+*.pptx
+*.pdf
+SPEAKER_SCRIPT.md
+
+# local preview / editor config (absolute paths)
+.claude/
+
+# os / editor
+.DS_Store
+*.log
+.vscode/
+.idea/
