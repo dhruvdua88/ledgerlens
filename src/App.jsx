@@ -312,7 +312,7 @@ export default function App() {
         </div>
 
         {tab === 'chat' && <ChatPanel ready={ready} history={history} model={activeModel} rate={settings.rate} free={settings.provider === 'local'} groups={groups} onAsk={onAsk} onReformat={onReformat} onImprove={onImprove} onSaveQuery={saveQuery} onClearChat={clearChat} onDeleteTurn={deleteTurn} pending={pending} onConsumePending={() => setPending(null)} />}
-        {tab === 'python' && <PandasTab ready={ready} onPython={onPython} />}
+        {tab === 'python' && <PandasTab ready={ready} onPython={onPython} groups={groups} />}
         {tab === 'manual' && <ManualTab db={db} schema={schema} mask={mask} catalog={catalog} groups={groups} />}
         {tab === 'groups' && <GroupManager catalog={catalog} groups={groups} onSave={upsertGroup} onDelete={deleteGroup} />}
         {tab === 'profile' && <ProfileTab groups={groups} savedQueries={savedQueries} prefs={settings} company={company} onImported={onProfileImported} onDeleteQuery={deleteQuery} onRunQuery={runSavedQuery} />}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 import { FORMATS } from '../lib/pyodide.js'
 
 const SUGGESTIONS = {
@@ -9,7 +9,7 @@ const SUGGESTIONS = {
   chart_jpeg: 'Top 10 expense ledgers as a bar chart',
 }
 
-export default function PandasTab({ ready, onPython }) {
+export default function PandasTab({ ready, onPython, groups = [] }) {
   const [q, setQ] = useState('')
   const [format, setFormat] = useState('excel')
   const [busy, setBusy] = useState(false)
@@ -17,6 +17,22 @@ export default function PandasTab({ ready, onPython }) {
   const [res, setRes] = useState(null) // { code, error?, bytes?, mime?, filename?, ext?, stdout? }
   const [showCode, setShowCode] = useState(false)
   const [imgUrl, setImgUrl] = useState(null)
+  const [mention, setMention] = useState(null)
+  const [hi, setHi] = useState(0)
+  const taRef = useRef(null)
+  const mentionList = mention ? groups.filter((g) => g.name.toLowerCase().includes(mention.query.toLowerCase())).slice(0, 8) : []
+
+  function onComposerChange(e) {
+    const val = e.target.value; setQ(val)
+    const m = val.slice(0, e.target.selectionStart).match(/@([\p{L}\w]*)$/u)
+    if (m && groups.length) { setMention({ query: m[1], atPos: e.target.selectionStart - m[0].length }); setHi(0) } else setMention(null)
+  }
+  function pickMention(g) {
+    const ta = taRef.current; const cur = ta ? ta.selectionStart : q.length
+    const before = q.slice(0, mention.atPos), insert = `@${g.name} `, next = before + insert + q.slice(cur)
+    setQ(next); setMention(null)
+    requestAnimationFrame(() => { if (ta) { ta.focus(); const p = before.length + insert.length; ta.setSelectionRange(p, p) } })
+  }
 
   async function run(text) {
     const question = (text ?? q).trim()
@@ -90,13 +106,33 @@ export default function PandasTab({ ready, onPython }) {
         )}
       </div>
 
+      {mention && mentionList.length > 0 && (
+        <div className="mention-menu">
+          <div className="mention-hint">Reference a group</div>
+          {mentionList.map((g, i) => (
+            <div key={g.id} className={`mention-item ${i === hi ? 'on' : ''}`} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); pickMention(g) }}>
+              <span style={{ width: 9, height: 9, borderRadius: 3, background: g.color, display: 'inline-block' }} />
+              {g.name}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="composer">
         <textarea
+          ref={taRef}
           value={q}
-          placeholder={ready ? `Describe the analysis — e.g. “${SUGGESTIONS[format]}”` : 'Loading data…'}
+          placeholder={ready ? `Describe the analysis — type @ to reference a group, e.g. “${SUGGESTIONS[format]}”` : 'Loading data…'}
           disabled={!ready || busy}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); run() } }}
+          onChange={onComposerChange}
+          onKeyDown={(e) => {
+            if (mention && mentionList.length) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => (h + 1) % mentionList.length); return }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => (h - 1 + mentionList.length) % mentionList.length); return }
+              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[hi]); return }
+              if (e.key === 'Escape') { e.preventDefault(); setMention(null); return }
+            }
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); run() }
+          }}
         />
         <button className="btn pri" disabled={!ready || busy || !q.trim()} onClick={() => run()}>{busy ? '…' : 'Run'}</button>
       </div>
