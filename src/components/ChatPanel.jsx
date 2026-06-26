@@ -23,8 +23,30 @@ export default function ChatPanel({ ready, history = [], onAsk, onReformat, onIm
   const [replyText, setReplyText] = useState('')
   const [improve, setImprove] = useState(null)          // { improved, why, alternatives }
   const [improving, setImproving] = useState(false)
+  const [mention, setMention] = useState(null)          // { query, atPos } when typing @group
+  const [hi, setHi] = useState(0)
   const busyRef = useRef(false)
   const endRef = useRef(null)
+  const taRef = useRef(null)
+
+  const mentionList = mention ? groups.filter((g) => g.name.toLowerCase().includes(mention.query.toLowerCase())).slice(0, 8) : []
+
+  function onComposerChange(e) {
+    const val = e.target.value; setQ(val)
+    const cur = e.target.selectionStart
+    const m = val.slice(0, cur).match(/@([\p{L}\w]*)$/u)
+    if (m && groups.length) { setMention({ query: m[1], atPos: cur - m[0].length }); setHi(0) }
+    else setMention(null)
+  }
+  function pickMention(g) {
+    const ta = taRef.current; const cur = ta ? ta.selectionStart : q.length
+    const before = q.slice(0, mention.atPos), after = q.slice(cur)
+    const insert = `@${g.name} `
+    const next = before + insert + after
+    setQ(next); setMention(null)
+    setActive((a) => (a.includes(g.id) ? a : [...a, g.id]))
+    requestAnimationFrame(() => { if (ta) { ta.focus(); const p = before.length + insert.length; ta.setSelectionRange(p, p) } })
+  }
 
   async function runSql(question) {
     setInflight({ parentId: null, kind: 'sql', label: question })
@@ -199,13 +221,33 @@ export default function ChatPanel({ ready, history = [], onAsk, onReformat, onIm
         </div>
       )}
 
+      {mention && mentionList.length > 0 && (
+        <div className="mention-menu">
+          <div className="mention-hint">Scope to group</div>
+          {mentionList.map((g, i) => (
+            <div key={g.id} className={`mention-item ${i === hi ? 'on' : ''}`} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); pickMention(g) }}>
+              <span style={{ width: 9, height: 9, borderRadius: 3, background: g.color, display: 'inline-block' }} />
+              {g.name}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="composer">
         <textarea
+          ref={taRef}
           value={q}
-          placeholder={ready ? 'Ask a new question — or type a rough idea and hit ✨ Improve' : 'Loading data…'}
+          placeholder={ready ? 'Ask a new question — type @ to scope to a group, or ✨ Improve' : 'Loading data…'}
           disabled={!ready || busy}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask() } }}
+          onChange={onComposerChange}
+          onKeyDown={(e) => {
+            if (mention && mentionList.length) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => (h + 1) % mentionList.length); return }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => (h - 1 + mentionList.length) % mentionList.length); return }
+              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[hi]); return }
+              if (e.key === 'Escape') { e.preventDefault(); setMention(null); return }
+            }
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask() }
+          }}
         />
         <button className="btn" disabled={!ready || improving} onClick={doImprove} title="Improve or suggest a question">{improving ? '…' : (q.trim() ? '✨ Improve' : '✨ Suggest')}</button>
         <button className="btn pri" disabled={!ready || busy || !q.trim()} onClick={() => ask()}>{busy ? '…' : 'Ask'}</button>
