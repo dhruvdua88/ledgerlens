@@ -108,7 +108,8 @@ export default function App() {
     setMeta({ ledgers: cat.ledgers.length, parties: cat.parties.length })
     setCompany(name); setCompanyKey(ck); setHistory(loadHistory(ck))
   }
-  useEffect(() => { openSample().then((d) => loadDb(d, 'Cache Digitech Pvt. Ltd')).catch((e) => console.error('sample load', e)) }, [])
+  // No auto-load — the user chooses a .sqlite (or the sample) on the landing screen.
+  function useSample() { openSample().then((d) => loadDb(d, 'Cache Digitech Pvt. Ltd')).catch((e) => alert('Could not load sample: ' + e.message)) }
 
   const pushTurn = useCallback((turn) => {
     setHistory((prev) => { const next = [...prev, turn]; saveHistory(companyKey, next); return next })
@@ -169,7 +170,7 @@ export default function App() {
       const led = catalog ? resolveGroup(g, catalog).ledgers : []
       if (led.length) { groupsMap[key] = led; groupNames.push(key) }
     }
-    const { messages: msgs } = buildPyMessages(mask, question, format, groupNames)
+    const { messages: msgs } = buildPyMessages(mask, question, format, groupNames, catalog)
 
     onStatus?.('Generating Python…')
     let { content } = await chat({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: provider.model, messages: msgs })
@@ -297,7 +298,7 @@ export default function App() {
         <div className="topbar">
           <div>
             <div className="ttl">{tab.startsWith('mod:') ? (moduleById(tab.slice(4))?.label || 'Module') : TITLES[tab]}</div>
-            <div className="sub">{ready ? `${company} · ${meta.ledgers} ledgers · ${meta.parties} parties · ${groups.length} groups` : 'Loading sample data…'}</div>
+            <div className="sub">{ready ? `${company} · ${meta.ledgers} ledgers · ${meta.parties} parties · ${groups.length} groups` : 'No company loaded — choose a .sqlite to begin'}</div>
           </div>
           {(() => {
             const local = settings.provider === 'local'
@@ -311,15 +312,33 @@ export default function App() {
           })()}
         </div>
 
-        {tab === 'chat' && <ChatPanel ready={ready} history={history} model={activeModel} rate={settings.rate} free={settings.provider === 'local'} groups={groups} onAsk={onAsk} onReformat={onReformat} onImprove={onImprove} onSaveQuery={saveQuery} onClearChat={clearChat} onDeleteTurn={deleteTurn} pending={pending} onConsumePending={() => setPending(null)} />}
-        {tab === 'python' && <PandasTab ready={ready} onPython={onPython} groups={groups} />}
-        {tab === 'manual' && <ManualTab db={db} schema={schema} mask={mask} catalog={catalog} groups={groups} />}
-        {tab === 'groups' && <GroupManager catalog={catalog} groups={groups} onSave={upsertGroup} onDelete={deleteGroup} />}
-        {tab === 'profile' && <ProfileTab groups={groups} savedQueries={savedQueries} prefs={settings} company={company} onImported={onProfileImported} onDeleteQuery={deleteQuery} onRunQuery={runSavedQuery} />}
-        {tab === 'privacy' && <PrivacyTab schema={schema} mask={mask} catalog={catalog} groups={groups} />}
-        {tab === 'cost' && <CostTab log={costLog} rate={settings.rate} onClear={clearCost} />}
+        {!db && tab !== 'settings' && (
+          <div className="body">
+            <div className="empty welcome">
+              <div className="welcome-mark" aria-hidden="true">◐</div>
+              <h2 className="welcome-ttl">Load a Tally export to begin</h2>
+              <p className="welcome-sub">Choose your company's <b>.sqlite</b> file. It opens entirely in your browser — your data never leaves this device.</p>
+              <div className="actions" style={{ justifyContent: 'center', marginTop: 18 }}>
+                <label className="btn pri" style={{ cursor: 'pointer' }}>
+                  ↑ Choose .sqlite file
+                  <input type="file" accept=".sqlite,.db" style={{ display: 'none' }} onChange={onUpload} />
+                </label>
+                <button className="btn" onClick={useSample}>Try the sample (Cache Digitech)</button>
+              </div>
+              <p style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 14 }}>Export from Tally with the SQLite loader. Nothing is uploaded.</p>
+            </div>
+          </div>
+        )}
+
+        {db && tab === 'chat' && <ChatPanel ready={ready} history={history} model={activeModel} rate={settings.rate} free={settings.provider === 'local'} groups={groups} onAsk={onAsk} onReformat={onReformat} onImprove={onImprove} onSaveQuery={saveQuery} onClearChat={clearChat} onDeleteTurn={deleteTurn} pending={pending} onConsumePending={() => setPending(null)} />}
+        {db && tab === 'python' && <PandasTab ready={ready} onPython={onPython} groups={groups} />}
+        {db && tab === 'manual' && <ManualTab db={db} schema={schema} mask={mask} catalog={catalog} groups={groups} />}
+        {db && tab === 'groups' && <GroupManager catalog={catalog} groups={groups} onSave={upsertGroup} onDelete={deleteGroup} />}
+        {db && tab === 'profile' && <ProfileTab groups={groups} savedQueries={savedQueries} prefs={settings} company={company} onImported={onProfileImported} onDeleteQuery={deleteQuery} onRunQuery={runSavedQuery} />}
+        {db && tab === 'privacy' && <PrivacyTab schema={schema} mask={mask} catalog={catalog} groups={groups} />}
+        {db && tab === 'cost' && <CostTab log={costLog} rate={settings.rate} onClear={clearCost} />}
         {tab === 'settings' && <SettingsTab settings={settings} onSave={saveSettings} />}
-        {tab.startsWith('mod:') && (
+        {db && tab.startsWith('mod:') && (
           <ModuleView db={db} module={moduleById(tab.slice(4))} ctx={{
             relatedLedgers: catalog ? groups.filter((g) => /relat|associat|sister|subsidiar|holding/i.test(g.name)).flatMap((g) => resolveGroup(g, catalog).ledgers) : [],
           }} />
