@@ -46,7 +46,20 @@ export function buildMask(catalog) {
   // "Redington Ltd.") still get masked. Skip corporate/stop words that aren't identifying.
   const STOP = new Set(['ltd', 'limited', 'pvt', 'private', 'llp', 'inc', 'co', 'company',
     'the', 'and', 'of', 'india', 'indian', 'services', 'solutions', 'technologies',
-    'enterprises', 'industries', 'corporation', 'group', 'trust', 'huf', 'sons'])
+    'enterprises', 'industries', 'corporation', 'group', 'trust', 'huf', 'sons',
+    // common accounting / query words — they appear inside ledger names ('Sales Accounts',
+    // 'Cash-in-hand') but in a question they are generic verbs/nouns, NOT an entity the user
+    // means to filter to. Masking them mis-narrows the query to one ledger. Never tokenise them.
+    'sales', 'sale', 'purchase', 'purchases', 'cash', 'bank', 'tax', 'taxes', 'gst', 'igst',
+    'cgst', 'sgst', 'tds', 'duty', 'duties', 'output', 'input', 'expense', 'expenses', 'income',
+    'incomes', 'interest', 'salary', 'wages', 'rent', 'journal', 'payment', 'payments', 'receipt',
+    'receipts', 'contra', 'invoice', 'invoices', 'voucher', 'vouchers', 'party', 'parties',
+    'customer', 'customers', 'vendor', 'vendors', 'debtor', 'debtors', 'creditor', 'creditors',
+    'sundry', 'stock', 'inventory', 'item', 'items', 'ledger', 'ledgers', 'account', 'accounts',
+    'opening', 'closing', 'balance', 'net', 'gross', 'total', 'turnover', 'month', 'monthly',
+    'year', 'yearly', 'quarter', 'date', 'amount', 'value', 'goods', 'capital', 'asset', 'assets',
+    'liability', 'liabilities', 'provision', 'provisions', 'loan', 'loans', 'fixed', 'current',
+    'direct', 'indirect', 'reverse', 'charge', 'professional', 'contractor', 'depreciation'])
   const wordMap = new Map() // lowerword -> token (only if unambiguous)
   const seen = new Map()    // lowerword -> Set(token)
   for (const [name, tok] of fwd) {
