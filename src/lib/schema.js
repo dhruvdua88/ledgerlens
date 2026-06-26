@@ -46,7 +46,10 @@ const EVIDENCE = `# EVIDENCE — Tally accounting domain knowledge (use to inter
 - A "sales voucher" is ANY voucher containing at least one sales-revenue line — identify it by GUID, not by a voucher_type literal:
     voucher_guid IN (SELECT voucher_guid FROM daybook_accounting_lines WHERE ledger_primary_group = '<sales group>')
   This is robust whether the company calls its sales voucher 'Sales', 'Domestic Sale', 'Local Sales', 'Interstate Sales', 'Tax Invoice', etc.
-- "Total sales" = SUM(amount) over sales-revenue lines (signed sum nets credit notes/returns → net sales). "GST on sales" = SUM(amount) over duties/taxes lines that sit inside those same sales vouchers.
+- ⚠ CRITICAL — the duties/taxes group holds BOTH output GST (on sales, a credit) AND input GST (on purchases, a debit). They use the SAME ledgers. If you sum the duties/taxes group across ALL vouchers, input GST nets against output GST and the result is WRONG (often negative).
+  WRONG:  SUM(CASE WHEN ledger_primary_group='Duties & Taxes' THEN amount END)  -- over the whole daybook
+  RIGHT:  only sum duties/taxes lines whose voucher_guid is a SALES voucher (defined above). ALWAYS scope GST-on-sales to sales vouchers via a JOIN or IN on those guids. Same rule for GST-on-purchases (scope to purchase vouchers).
+- "Total sales" = SUM(amount) over sales-revenue lines (signed sum nets credit notes/returns → net sales). "GST on sales" = SUM(amount) over duties/taxes lines that sit inside those same sales vouchers (NEVER across the whole daybook).
 - "Turnover" / "exposure" with a party => SUM(ABS(amount)) (a party hits both Dr and Cr so a signed SUM nets to ~0).
 - Dr/Cr: ledger_is_deemedpositive='1' => positive amount is a DEBIT; ='0' => positive amount is a CREDIT.
 - "Sales with no GST" => a sales voucher (defined above) having no line whose ledger_primary_group is the duties/taxes group.
@@ -174,11 +177,14 @@ ORDER BY month;`,
   },
   {
     q: 'total sales per month and GST thereon',
-    sql: `WITH sv AS (SELECT DISTINCT voucher_guid FROM daybook_accounting_lines WHERE ledger_primary_group = 'Sales Accounts')
-SELECT substr(d.voucher_date,1,7) AS month,
-       ROUND(SUM(CASE WHEN d.ledger_primary_group = 'Sales Accounts' THEN d.amount END),2) AS sales,
-       ROUND(SUM(CASE WHEN d.ledger_primary_group = 'Duties & Taxes' THEN d.amount END),2) AS gst
-FROM daybook_accounting_lines d JOIN sv ON sv.voucher_guid = d.voucher_guid
+    // Single-pass SUM(CASE) BUT scoped to sales vouchers via WHERE voucher_guid IN (...).
+    // The WHERE is mandatory: without it the duties/taxes total mixes input GST (purchases,
+    // negative) with output GST (sales, positive) and the GST column comes out wrong/negative.
+    sql: `SELECT substr(voucher_date,1,7) AS month,
+       ROUND(SUM(CASE WHEN ledger_primary_group = 'Sales Accounts' THEN amount ELSE 0 END),2) AS sales,
+       ROUND(SUM(CASE WHEN ledger_primary_group = 'Duties & Taxes' THEN amount ELSE 0 END),2) AS gst
+FROM daybook_accounting_lines
+WHERE voucher_guid IN (SELECT voucher_guid FROM daybook_accounting_lines WHERE ledger_primary_group = 'Sales Accounts')
 GROUP BY month
 ORDER BY month;`,
   },

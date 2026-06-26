@@ -4,7 +4,7 @@ const BANNED = /\b(insert|update|delete|drop|alter|create|replace|attach|detach|
 export function sanitizeSql(raw) {
   let sql = (raw || '').trim()
 
-  // 1) drop reasoning blocks (R1-style models: Arctic-Text2SQL-R1, DeepSeek reasoner)
+  // 1) drop reasoning blocks (R1-style reasoning models, e.g. Arctic-Text2SQL-R1)
   sql = sql.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
   // if an unclosed <think> remains, keep only what's after it
   const t = sql.lastIndexOf('</think>')

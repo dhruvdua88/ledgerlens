@@ -1,12 +1,11 @@
 // LLM provider registry. Both providers speak OpenAI-compatible /chat/completions,
 // so switching is just a base URL + key change.
 export const PROVIDERS = {
-  deepseek: {
-    label: 'DeepSeek (cloud)',
-    baseUrl: 'https://api.deepseek.com',
+  cloud: {
+    label: 'Cloud LLM',
     needsKey: true,
     free: false,
-    privacy: 'Masked schema leaves the device; data never does.',
+    privacy: 'Only the masked schema + question leave the device — never your data.',
   },
   local: {
     label: 'Local model (air-gapped)',
@@ -17,7 +16,7 @@ export const PROVIDERS = {
   },
 }
 
-export const DEFAULT_PROVIDER = 'deepseek'
+export const DEFAULT_PROVIDER = 'cloud'
 
 // Suggested local model tags (editable in Settings). Arctic-Text2SQL-R1 = SQL specialist.
 export const LOCAL_MODEL_SUGGESTIONS = [

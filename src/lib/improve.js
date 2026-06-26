@@ -1,5 +1,5 @@
 // Question improver — helps a CA phrase a precise, answerable data question.
-// Uses the Assistant model (Chrome Nano / local / DeepSeek), NOT the SQL engine.
+// Uses the Assistant model (Chrome Nano / local / cloud LLM), NOT the SQL engine.
 // Sends only the question + generic vocabulary — never ledger/party names.
 import { chat } from './llm.js'
 import { isChromeReady, chromePrompt } from './chromeai.js'

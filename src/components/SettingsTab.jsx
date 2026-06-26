@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { MODELS, fmtINR } from '../lib/pricing.js'
+import { fmtINR } from '../lib/pricing.js'
 import { PROVIDERS, LOCAL_MODEL_SUGGESTIONS } from '../lib/providers.js'
 import { chromeStatus } from '../lib/chromeai.js'
 
@@ -9,14 +9,9 @@ export default function SettingsTab({ settings, onSave }) {
   const [chrome, setChrome] = useState('checking…')
   const set = (patch) => { setS((p) => ({ ...p, ...patch })); setSaved(false) }
   const isLocal = s.provider === 'local'
-  const price = MODELS[s.model]?.price
 
   useEffect(() => { chromeStatus().then(setChrome) }, [])
-  const ASSISTANTS = [
-    ['auto', 'Auto (Chrome → local)'],
-    ['local', 'Local model'],
-    ['deepseek', 'DeepSeek (cloud)'],
-  ]
+  const ASSISTANTS = [['auto', 'Auto (Chrome → local)'], ['local', 'Local model'], ['cloud', 'Cloud LLM']]
 
   return (
     <div className="body">
@@ -40,19 +35,28 @@ export default function SettingsTab({ settings, onSave }) {
         {!isLocal && (
           <>
             <div className="field">
-              <label>DeepSeek API key (stored only in this browser)</label>
-              <input type="password" value={s.apiKey} placeholder="sk-…" onChange={(e) => set({ apiKey: e.target.value })} />
+              <label>API endpoint (OpenAI-compatible base URL)</label>
+              <input value={s.cloudBaseUrl} onChange={(e) => set({ cloudBaseUrl: e.target.value })} placeholder="https://api.your-llm.com" />
             </div>
             <div className="field">
               <label>Model</label>
-              <select value={s.model} onChange={(e) => set({ model: e.target.value })}>
-                {Object.entries(MODELS).map(([id, info]) => <option key={id} value={id}>{info.label} — {info.note}</option>)}
-              </select>
+              <input value={s.cloudModel} onChange={(e) => set({ cloudModel: e.target.value })} placeholder="model id" />
             </div>
-            {price && <>
-              <div className="kv"><span className="k">Input (cache miss)</span><span className="v">{fmtINR(price.inMiss, s.rate)} / 1M tok</span></div>
-              <div className="kv"><span className="k">Output</span><span className="v">{fmtINR(price.output, s.rate)} / 1M tok</span></div>
-            </>}
+            <div className="field">
+              <label>API key (stored only in this browser)</label>
+              <input type="password" value={s.apiKey} placeholder="sk-…" onChange={(e) => set({ apiKey: e.target.value })} />
+            </div>
+            <div className="field" style={{ display: 'flex', gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                <label>Input price ($ / 1M tokens)</label>
+                <input type="number" step="0.001" value={s.priceIn} onChange={(e) => set({ priceIn: Number(e.target.value) || 0 })} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label>Output price ($ / 1M tokens)</label>
+                <input type="number" step="0.001" value={s.priceOut} onChange={(e) => set({ priceOut: Number(e.target.value) || 0 })} />
+              </div>
+            </div>
+            <div className="kv"><span className="k">Cost shown in</span><span className="v">INR at ₹{s.rate}/USD · e.g. 10k in + 2k out ≈ {fmtINR((10000 / 1e6) * s.priceIn + (2000 / 1e6) * s.priceOut, s.rate)}</span></div>
           </>
         )}
 
@@ -98,14 +102,14 @@ export default function SettingsTab({ settings, onSave }) {
               {chrome !== 'available' && ' — falls back to your local model.'}
             </p>
           </div>
-          {s.assistant !== 'deepseek' && (
+          {s.assistant !== 'cloud' && (
             <div className="field">
               <label>Local writer model tag</label>
               <input value={s.assistantLocalModel} onChange={(e) => set({ assistantLocalModel: e.target.value })} placeholder="qwen2.5:3b" />
               <p className="muted" style={{ margin: '6px 0 0' }}>A general chat model (not the SQL specialist). e.g. <code>qwen2.5:3b</code>, <code>llama3.1:8b</code>.</p>
             </div>
           )}
-          {s.assistant === 'deepseek' && <div className="hint">Reformatting with DeepSeek sends the result content (numbers + names) to the cloud. Use Auto/Local to keep everything on-device.</div>}
+          {s.assistant === 'cloud' && <div className="hint">Reformatting with the cloud LLM sends the result content (numbers + names) to the cloud. Use Auto/Local to keep everything on-device.</div>}
         </div>
 
         <div className="actions">

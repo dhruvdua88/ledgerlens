@@ -17,7 +17,7 @@ export default function PrivacyTab({ schema, mask, catalog, groups }) {
     <div className="body">
       <div className="panel" style={{ maxWidth: 760 }}>
         <h3>Privacy — what leaves this device</h3>
-        <p className="muted">The SQLite database never uploads. Only the masked payload below is sent to DeepSeek. Names become tokens; no amounts, no rows, no client identities.</p>
+        <p className="muted">The SQLite database never uploads. Only the masked payload below is sent to the LLM. Names become tokens; no amounts, no rows, no client identities.</p>
 
         <div className="metrics" style={{ marginBottom: 18 }}>
           <div className="metric"><div className="l">Ledgers masked</div><div className="v">{mask.ledgerTokens.length}</div></div>

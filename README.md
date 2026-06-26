@@ -14,11 +14,11 @@ client name, never a row.
 - **Chat with data** — NL → SQL over an in-browser SQLite (`sql.js`), read-only guard, self-correct.
 - **Privacy masking** — ledgers/parties/stock-items tokenised before any LLM call; SQL un-tokenised locally before running.
 - **Custom groups** — define semantic buckets (Related parties, Cash equivalents…) by primary group / parent / ledger / stock item; mixed + rule-based auto-refresh.
-- **Three model tiers** — DeepSeek (cloud, masked) · BYO key · **fully air-gapped local** (Ollama / Arctic-Text2SQL-R1).
-- **Assistant** — a separate writer model (Chrome Gemini Nano → local → DeepSeek) turns results into summaries / client emails / explanations.
+- **Three model tiers** — Cloud LLM (BYO OpenAI-compatible endpoint, masked) · BYO key · **fully air-gapped local** (Ollama / Arctic-Text2SQL-R1).
+- **Assistant** — a separate writer model (Chrome Gemini Nano → local → cloud LLM) turns results into summaries / client emails / explanations.
 - **Chat history** — persisted per company; multi-turn follow-ups ("now only March").
 - **Profiles** — export/import saved queries + groups + prefs (never the API key).
-- **Cost tab** — DeepSeek spend in INR; **Excel export** with a provenance working-paper sheet.
+- **Cost tab** — cloud LLM spend in INR; **Excel export** with a provenance working-paper sheet.
 
 ## Stack
 Vite + React, `sql.js` (SQLite/WASM), `xlsx`. Fully client-side — deployable to GitHub Pages.

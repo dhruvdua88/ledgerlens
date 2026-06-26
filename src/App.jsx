@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { openSample, openSqlite, readCatalog, readSchema, readCompany } from './lib/db.js'
 import { buildMask } from './lib/mask.js'
 import { ask } from './lib/pipeline.js'
-import { DEFAULT_MODEL, DEFAULT_USDINR } from './lib/pricing.js'
+import { DEFAULT_USDINR, DEFAULT_PRICE } from './lib/pricing.js'
 import { PROVIDERS, DEFAULT_PROVIDER, DEFAULT_LOCAL_MODEL } from './lib/providers.js'
 import { loadGroups, saveGroups, resolveGroup } from './lib/groups.js'
 import ChatPanel from './components/ChatPanel.jsx'
@@ -20,19 +20,24 @@ import ModuleView from './components/ModuleView.jsx'
 import { MODULES, moduleById } from './lib/modules.js'
 
 const LS = {
-  key: 'll_deepseek_key', model: 'll_model', cost: 'll_cost_log', rate: 'll_usdinr',
-  provider: 'll_provider', localBase: 'll_local_base', localModel: 'll_local_model',
+  key: 'll_api_key', cost: 'll_cost_log', rate: 'll_usdinr', provider: 'll_provider',
+  cloudBase: 'll_cloud_base', cloudModel: 'll_cloud_model', priceIn: 'll_price_in', priceOut: 'll_price_out',
+  localBase: 'll_local_base', localModel: 'll_local_model',
   assistant: 'll_assistant', assistantModel: 'll_assistant_model',
 }
 
 function loadSettings() {
+  const num = (k, d) => { const v = Number(localStorage.getItem(k)); return Number.isFinite(v) && v > 0 ? v : d }
   return {
     provider: localStorage.getItem(LS.provider) || DEFAULT_PROVIDER,
     apiKey: localStorage.getItem(LS.key) || '',
-    model: localStorage.getItem(LS.model) || DEFAULT_MODEL,
+    cloudBaseUrl: localStorage.getItem(LS.cloudBase) || '',
+    cloudModel: localStorage.getItem(LS.cloudModel) || '',
+    priceIn: num(LS.priceIn, DEFAULT_PRICE.inPer1M),
+    priceOut: num(LS.priceOut, DEFAULT_PRICE.outPer1M),
     localBaseUrl: localStorage.getItem(LS.localBase) || PROVIDERS.local.baseUrl,
     localModel: localStorage.getItem(LS.localModel) || DEFAULT_LOCAL_MODEL,
-    rate: Number(localStorage.getItem(LS.rate)) || DEFAULT_USDINR,
+    rate: num(LS.rate, DEFAULT_USDINR),
     assistant: localStorage.getItem(LS.assistant) || 'auto', // auto = Chrome Nano -> local
     assistantLocalModel: localStorage.getItem(LS.assistantModel) || 'qwen2.5:3b',
   }
@@ -40,7 +45,10 @@ function loadSettings() {
 function persistSettings(s) {
   localStorage.setItem(LS.provider, s.provider)
   localStorage.setItem(LS.key, s.apiKey)
-  localStorage.setItem(LS.model, s.model)
+  localStorage.setItem(LS.cloudBase, s.cloudBaseUrl)
+  localStorage.setItem(LS.cloudModel, s.cloudModel)
+  localStorage.setItem(LS.priceIn, String(s.priceIn))
+  localStorage.setItem(LS.priceOut, String(s.priceOut))
   localStorage.setItem(LS.localBase, s.localBaseUrl)
   localStorage.setItem(LS.localModel, s.localModel)
   localStorage.setItem(LS.rate, String(s.rate))
@@ -50,7 +58,7 @@ function persistSettings(s) {
 // derive the runtime provider config the pipeline needs
 function providerConfig(s) {
   if (s.provider === 'local') return { baseUrl: s.localBaseUrl, apiKey: '', model: s.localModel, free: true }
-  return { baseUrl: PROVIDERS.deepseek.baseUrl, apiKey: s.apiKey, model: s.model, free: false }
+  return { baseUrl: s.cloudBaseUrl, apiKey: s.apiKey, model: s.cloudModel, free: false, price: { inPer1M: s.priceIn, outPer1M: s.priceOut } }
 }
 
 const TITLES = {
@@ -76,7 +84,7 @@ export default function App() {
   const [costLog, setCostLog] = useState(() => {
     try { return JSON.parse(localStorage.getItem(LS.cost) || '[]') } catch { return [] }
   })
-  const activeModel = settings.provider === 'local' ? settings.localModel : settings.model
+  const activeModel = settings.provider === 'local' ? settings.localModel : settings.cloudModel
 
   // fallbackName used when the export has no company_name metadata (e.g. the bundled sample)
   async function loadDb(database, fallbackName) {
@@ -249,11 +257,12 @@ export default function App() {
           </div>
           {(() => {
             const local = settings.provider === 'local'
-            const ok = local || settings.apiKey || tab === 'manual'
+            const cloudReady = settings.apiKey && settings.cloudBaseUrl
+            const ok = local || cloudReady || tab === 'manual'
             const text = tab === 'manual' ? 'No API — fully offline'
               : local ? 'Air-gapped — nothing leaves device'
-              : settings.apiKey ? 'Masked schema only — data stays on device'
-              : 'Add API key in Settings'
+              : cloudReady ? 'Masked schema only — data stays on device'
+              : 'Set up Cloud LLM in Settings'
             return <div className={`privacy-badge ${ok ? '' : 'off'}`}>🔒 {text}</div>
           })()}
         </div>

@@ -1,9 +1,8 @@
 // The "Assistant" (writer) role — separate from the SQL engine.
 // Turns a query RESULT into prose: summary, client email, plain-English explanation.
-// Privacy ladder: Chrome Nano (on-device) -> local Ollama -> DeepSeek (opt-in, data leaves).
+// Privacy ladder: Chrome Nano (on-device) -> local Ollama -> Cloud LLM (opt-in, data leaves).
 import { chat } from './llm.js'
 import { isChromeReady, chromePrompt } from './chromeai.js'
-import { PROVIDERS } from './providers.js'
 import { isAmountColumn, abbrINR } from './format.js'
 
 export const REFORMAT_MODES = {
@@ -32,11 +31,11 @@ function resultToText(result, capRows = 40) {
   return `${head}\n${sep}\n${body}${more}`
 }
 
-// Resolve which writer to use. pref = 'auto' | 'local' | 'deepseek'.
+// Resolve which writer to use. pref = 'auto' | 'local' | 'cloud'.
 export async function resolveAssistant(settings) {
   const pref = settings.assistant || 'auto'
-  if (pref === 'deepseek') {
-    return { kind: 'cloud', baseUrl: PROVIDERS.deepseek.baseUrl, apiKey: settings.apiKey, model: settings.model, free: false, label: 'DeepSeek', leaks: true }
+  if (pref === 'cloud') {
+    return { kind: 'cloud', baseUrl: settings.cloudBaseUrl, apiKey: settings.apiKey, model: settings.cloudModel, free: false, label: 'Cloud LLM', leaks: true }
   }
   if (pref === 'auto' && await isChromeReady()) {
     return { kind: 'chrome', free: true, label: 'Chrome Nano', leaks: false }

@@ -1,4 +1,4 @@
-// The ask() pipeline: question -> masked prompt -> DeepSeek -> guard -> unmask -> run.
+// The ask() pipeline: question -> masked prompt -> LLM -> guard -> unmask -> run.
 // One self-correct retry if SQLite rejects the query.
 import { chat } from './llm.js'
 import { buildSystemPrompt, buildMessages, FEW_SHOT } from './schema.js'
@@ -63,7 +63,7 @@ export async function ask({ db, schema, mask, catalog, groups, activeGroupIds, p
     result = runCompiled(db, compiled.runnable)
   }
 
-  const cost = free ? { usd: 0, inHit: 0, inMiss: usageTotal.prompt_tokens, output: usageTotal.completion_tokens } : costOf(model, usageTotal)
+  const cost = free ? { usd: 0, inHit: 0, inMiss: usageTotal.prompt_tokens, output: usageTotal.completion_tokens } : costOf(usageTotal, provider.price)
   return {
     question, maskedQuestion,
     sql: compiled.runnable, maskedSql: compiled.maskedSql,

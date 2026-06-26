@@ -2,14 +2,14 @@
 
 NL→SQL audit assistant over Tally exports. **Local-first. Data never leaves the browser.**
 Headline feature = chat → SQL → run in-browser → beautiful result + Excel export.
-LLM backend = DeepSeek (BYO key). New project — NOT a branch of FinAnalyzer.
+LLM backend = Cloud LLM (BYO key). New project — NOT a branch of FinAnalyzer.
 
 ## Stack (decided)
 - Vite + React (client-side SPA, deployable to GitHub Pages)
 - `sql.js` (SQLite compiled to WASM) — runs entirely in the browser tab
-- DeepSeek API, OpenAI-compatible, base `https://api.deepseek.com`
-  - Models: `deepseek-v4-flash` (cheap, default), `deepseek-v4-pro` (hard queries)
-  - (`deepseek-chat`/`deepseek-reasoner` deprecate 2026-07-24 → map to v4-flash modes)
+- Cloud LLM API, OpenAI-compatible, base `your endpoint`
+  - Models: `a cheap cloud model` (cheap, default), `a stronger cloud model` (hard queries)
+  - (``/`` deprecate 2026-07-24 → map to v4-flash modes)
 - `xlsx` (SheetJS) for Excel export with provenance sheet
 
 ## Privacy model (NON-NEGOTIABLE — the whole pitch)
@@ -20,16 +20,16 @@ LLM backend = DeepSeek (BYO key). New project — NOT a branch of FinAnalyzer.
 - LLM returns SQL using tokens → we **unmask** tokens → real names → run on local DB.
 - No row data, no rupee figure, no client name ever leaves the device.
 - Guard: reject any SQL that isn't a single read-only SELECT/WITH.
-- Air-gapped tier (later): swap DeepSeek for local Ollama → zero egress.
+- Air-gapped tier (later): swap Cloud LLM for local Ollama → zero egress.
 
 ## Phase 1 — SQL bot (DOING NOW)
-- [x] Confirm DeepSeek latest models + pricing
+- [x] Confirm Cloud LLM latest models + pricing
 - [x] Project scaffold + sample Cache Digitech DB
 - [ ] sql.js loader: load sample DB + upload .sqlite / .zip-of-csv
 - [ ] Build `daybook_accounting_lines` view if export only has raw CSVs
 - [ ] Masking engine (bidirectional token map, mask question + catalog, unmask SQL)
 - [ ] Schema/prompt builder (system prompt + few-shot incl. GSTR1=sales-base trap)
-- [ ] DeepSeek client (OpenAI-compat fetch, read usage tokens)
+- [ ] Cloud LLM client (OpenAI-compat fetch, read usage tokens)
 - [ ] SQL guard (read-only enforce + LIMIT cap)
 - [ ] Self-correct loop (feed sql.js error back once, max 2 attempts)
 - [ ] Result table: Indian number format, right-align figures, flag chips, drill-down
@@ -48,12 +48,12 @@ LLM backend = DeepSeek (BYO key). New project — NOT a branch of FinAnalyzer.
 - [x] Persist groups in localStorage
 
 ## Phase 2.5 — done alongside
-- [x] All DeepSeek costs in INR (editable USD→INR rate, default ₹94, in Settings)
+- [x] All Cloud LLM costs in INR (editable USD→INR rate, default ₹94, in Settings)
 - [x] Manual mode module: build tokenized prompt → copy into any LLM → paste SQL back → unmask + run locally (zero-API, proves tokenization)
 - [x] Stock-item masking (@@S#@@ tokens) + full sample DB (33 tables, 114 stock items, 610 inventory)
 
 ## Phase 4 — local model / air-gapped tier  ✅ DONE
-- [x] Provider abstraction (providers.js) — DeepSeek cloud vs Local, both OpenAI-compatible
+- [x] Provider abstraction (providers.js) — Cloud LLM cloud vs Local, both OpenAI-compatible
 - [x] Generic chat client (llm.js) with configurable baseUrl/apiKey/model
 - [x] Settings: provider radio; local = base URL + model tag (arctic-text2sql-r1:7b), no key
 - [x] R1 reasoning strip in sanitizeSql (<think>…</think>, fenced ```sql, prose-prefixed)
@@ -84,10 +84,10 @@ History (one transcript per company):
 - [x] Multi-turn context: prior turns (masked Q+SQL) injected so "now only March" works
 Reformat assistant (separate writer model):
 - [x] Assistant role split from SQL engine (Arctic can't write prose)
-- [x] Tiered: Chrome Nano (on-device) -> local Ollama -> DeepSeek (opt-in, warns)
+- [x] Tiered: Chrome Nano (on-device) -> local Ollama -> Cloud LLM (opt-in, warns)
 - [x] chromeai.js (Prompt API / LanguageModel), assistant.js, intent.js
 - [x] Result buttons: Summarize / Draft email / Explain + smart follow-up routing (Auto/SQL/Ask)
-- [x] Prose turns stored in history; copy; "sent to cloud" badge when DeepSeek
+- [x] Prose turns stored in history; copy; "sent to cloud" badge when Cloud LLM
 - [x] Pre-format amount cols to INR before sending to writer (fixes magnitude errors)
 - [x] Broadened amount-column regex (turnover/gross/sum/…) — fixes table display too
 - [x] Verified: local qwen2.5:3b drafts correct client email (₹164.77 Crore); Chrome Nano falls back cleanly
@@ -98,11 +98,11 @@ Reformat assistant (separate writer model):
 - [x] Removed Auto/SQL/Ask toggle — intent from location (reply = reformat, bottom box = new SQL)
 - [x] Quick buttons (Summarize/Email/Explain) still on each result
 - [x] Question improver (improve.js): ✨ Improve sharpens your question, ✨ Suggest when empty
-      - Assistant tier (Chrome→local→DeepSeek), sends only question + generic vocab (no client names)
+      - Assistant tier (Chrome→local→Cloud LLM), sends only question + generic vocab (no client names)
       - Returns improved + why + 3 alternatives, one-click to use
 - [x] Intuitive empty state: 3-step explainer (Ask → see SQL+result → reply to refine)
 - [x] Verified live on local Arctic + qwen: threaded reply linked via sourceId, improver returns suggestions
-- NOTE: qwen 3b prose can mis-order; use a bigger local writer or DeepSeek assistant for higher-stakes emails
+- NOTE: qwen 3b prose can mis-order; use a bigger local writer or Cloud LLM assistant for higher-stakes emails
 
 ## Demo ops
 - [x] scripts/*.command — one-click START-DEMO / STOP-DEMO + individual ollama/app start-stop

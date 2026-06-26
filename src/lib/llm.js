@@ -1,5 +1,5 @@
 // Provider-agnostic LLM client. OpenAI-compatible chat completions.
-// Works for DeepSeek (cloud) and any local OpenAI-compatible server
+// Works for any cloud LLM and any local OpenAI-compatible server
 // (Ollama / LM Studio / vLLM) — only baseUrl/apiKey/model change.
 export async function chat({ baseUrl, apiKey, model, messages, temperature = 0 }) {
   if (!model) throw new Error('No model selected.')

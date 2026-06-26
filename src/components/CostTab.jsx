@@ -1,5 +1,5 @@
 import React from 'react'
-import { fmtINR, MODELS } from '../lib/pricing.js'
+import { fmtINR } from '../lib/pricing.js'
 
 export default function CostTab({ log, rate, onClear }) {
   const total = log.reduce((s, e) => s + e.usd, 0)
@@ -10,7 +10,7 @@ export default function CostTab({ log, rate, onClear }) {
     <div className="body">
       <div className="panel" style={{ maxWidth: 720 }}>
         <h3>API cost</h3>
-        <p className="muted">What DeepSeek has charged this device, in INR at ₹{rate}/USD (set in Settings). Computed from the token usage each response reports, at current published prices.</p>
+        <p className="muted">What the cloud LLM has charged this device, in INR at ₹{rate}/USD (set in Settings). Computed from the token usage each response reports, at the per-token prices you set.</p>
 
         <div className="metrics" style={{ marginBottom: 20 }}>
           <div className="metric"><div className="l">Total spend</div><div className="v">{fmtINR(total, rate)}</div></div>
@@ -32,7 +32,7 @@ export default function CostTab({ log, rate, onClear }) {
                   <tr key={i}>
                     <td>{e.at}</td>
                     <td>{e.q.length > 46 ? e.q.slice(0, 46) + '…' : e.q}</td>
-                    <td>{MODELS[e.model]?.label || e.model}</td>
+                    <td>{e.model}</td>
                     <td className="num">{e.inTokens.toLocaleString('en-IN')}</td>
                     <td className="num">{e.outTokens.toLocaleString('en-IN')}</td>
                     <td className="num">{e.free ? 'local · ₹0' : fmtINR(e.usd, rate)}</td>
