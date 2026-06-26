@@ -127,6 +127,12 @@ function ledgerStatement(db, { ledger } = {}) {
 }
 
 // ── Party Ledger Transaction Matrix (full FinAnalyzer processor) ─────────
+// Faithful port of FinAnalyzer app/workers/partyMatrixWorker.ts + the
+// PartyLedgerMatrix.tsx UI, mapped onto the LedgerLens module contract.
+// Adds vs the earlier port: party master metadata (GSTIN/PAN/State/Reg-type),
+// manual TDS/GST/RCM tag overrides, Debit/Credit/Movement + First/Last cols,
+// and two extra sheets — Party × Counter-Ledger pivot and Voucher detail —
+// which the built-in multi-sheet Excel export picks up automatically.
 const BUCKETS = ['Sales', 'Purchase', 'Expenses', 'TDS', 'GST', 'RCM', 'Bank', 'Others']
 const isPlPrimary = (p) => /sale|income|purchase|inward|expense/i.test(p || '')
 function bucketFor(l, tds, gst, rcm) {
@@ -140,25 +146,52 @@ function bucketFor(l, tds, gst, rcm) {
   if (/bank/.test(n) || /bank/.test(p) || /bank/.test(par)) return 'Bank'
   return 'Others'
 }
-function partyMatrix(db, { primary, anomaly = 'All', search = '' } = {}) {
+// columns present on a table — defensive across tally-loader schema versions
+function tableCols(db, table) {
+  try { const r = runQuery(db, `PRAGMA table_info("${table}")`); const i = r.columns.indexOf('name'); return new Set(r.rows.map((row) => row[i])) }
+  catch { return new Set() }
+}
+// per-ledger master metadata (GSTIN / PAN / State / GST reg-type) — only the
+// columns that actually exist are selected, so an older export never throws.
+function partyMeta(db) {
+  const cols = tableCols(db, 'mst_ledger')
+  if (!cols.has('name')) return {}
+  const want = { gstin: ['gstn', 'gst_registration_number'], pan: ['it_pan', 'income_tax_number'], state: ['mailing_state', 'state', 'price_level'], regtype: ['gst_registration_type', 'gst_supply_type'] }
+  const pick = {}; for (const k in want) { const c = want[k].find((n) => cols.has(n)); if (c) pick[k] = c }
+  const sel = ['name', ...Object.values(pick)]
+  const r = runQuery(db, `SELECT ${sel.map((c) => `"${c}"`).join(',')} FROM mst_ledger`)
+  const idx = {}; r.columns.forEach((c, i) => (idx[c] = i))
+  const g = (row, key) => (pick[key] != null ? String(row[idx[pick[key]]] ?? '').trim() : '')
+  const out = {}
+  for (const row of r.rows) { const nm = row[idx.name]; if (nm == null) continue; out[nm] = { gstin: g(row, 'gstin'), pan: g(row, 'pan'), state: g(row, 'state'), regtype: g(row, 'regtype') } }
+  return out
+}
+function partyMatrix(db, { primary, anomaly = 'All', search = '', tdsExtra = '', gstExtra = '', rcmExtra = '', hideZero = true } = {}) {
   const ls = lines(db)
   const ms = masters(db)
+  const meta = partyMeta(db)
   const closeBy = {}; for (const m of ms) if (m.closing != null) closeBy[m.name] = m.closing
   const primaryOf = {}; for (const l of ls) if (!(l.ledger in primaryOf)) primaryOf[l.ledger] = l.primary
   const primaries = [...new Set(ls.map((l) => l.primary))].filter(Boolean).sort()
   const eff = primary || primaries.find((p) => /debtor|creditor/i.test(p)) || primaries[0]
-  // auto-tag TDS / GST / RCM ledgers by name (excluding P&L-primary ledgers)
+  // auto-tag TDS / GST / RCM ledgers by name (excluding P&L-primary ledgers),
+  // then union with any manual overrides (comma-separated ledger names).
   const allLedgers = [...new Set(ls.map((l) => l.ledger))]
-  const tag = (re) => new Set(allLedgers.filter((n) => re.test(n) && !isPlPrimary(primaryOf[n])))
-  const tds = tag(/tds|194/i), gst = tag(/igst|cgst|sgst|utgst|gst|cess/i), rcm = tag(/rcm|reverse charge/i)
+  const tag = (re) => allLedgers.filter((n) => re.test(n) && !isPlPrimary(primaryOf[n]))
+  const extra = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean)
+  const tds = new Set([...tag(/tds|194/i), ...extra(tdsExtra)])
+  const gst = new Set([...tag(/igst|cgst|sgst|utgst|gst|cess/i), ...extra(gstExtra)])
+  const rcm = new Set([...tag(/rcm|reverse charge/i), ...extra(rcmExtra)])
 
   const vs = groupVouchers(ls)
   const P = {}; let unbalanced = 0
+  const vdetail = []  // one row per party × voucher (apportioned) → Voucher detail sheet
   for (const [, legs] of vs) {
     if (Math.abs(legs.reduce((s, l) => s + l.amount, 0)) > 0.01) unbalanced++
     const partyLegs = legs.filter((l) => l.primary === eff); if (!partyLegs.length) continue
     const signed = {}; for (const l of partyLegs) signed[l.ledger] = (signed[l.ledger] || 0) + l.amount
     const absTotal = Object.values(signed).reduce((s, x) => s + Math.abs(x), 0); if (!absTotal) continue
+    const vdate = partyLegs[0].date || '', vtype = partyLegs[0].vtype || '', vno = partyLegs[0].vno || ''
     const cB = {}, cL = {}
     for (const l of legs) {
       if (l.primary === eff || l.amount === 0) continue
@@ -166,12 +199,17 @@ function partyMatrix(db, { primary, anomaly = 'All', search = '' } = {}) {
       cB[b] = (cB[b] || 0) + l.amount
       const e = (cL[l.ledger] ||= { amt: 0, b }); e.amt += l.amount
     }
+    const counterText = Object.entries(cL).sort((a, b) => Math.abs(b[1].amt) - Math.abs(a[1].amt)).map(([n, e]) => `${n}: ${e.amt.toFixed(2)}`).join(' | ')
     for (const [pname, ps] of Object.entries(signed)) {
       const share = Math.abs(ps) / absTotal
-      const r = (P[pname] ||= { vch: 0, mv: 0, b: Object.fromEntries(BUCKETS.map((k) => [k, 0])), cl: {} })
+      const r = (P[pname] ||= { vch: 0, mv: 0, dr: 0, cr: 0, first: '', last: '', b: Object.fromEntries(BUCKETS.map((k) => [k, 0])), cl: {} })
       r.vch++; r.mv += ps
+      if (ps < 0) r.dr += -ps; else if (ps > 0) r.cr += ps
+      if (vdate && (!r.first || vdate < r.first)) r.first = vdate
+      if (vdate && (!r.last || vdate > r.last)) r.last = vdate
       for (const b of BUCKETS) r.b[b] += (cB[b] || 0) * share
       for (const [cn, e] of Object.entries(cL)) { const x = (r.cl[cn] ||= { amt: 0, b: e.b }); x.amt += e.amt * share }
+      vdetail.push([pname, vdate, vtype, vno, r2(ps), ...BUCKETS.map((b) => r2((cB[b] || 0) * share)), counterText])
     }
   }
 
@@ -184,7 +222,8 @@ function partyMatrix(db, { primary, anomaly = 'All', search = '' } = {}) {
       .sort((a, b) => Math.abs(b[1].amt) - Math.abs(a[1].amt)).slice(0, 3).map(([n]) => n).join(', ')
     const active = BUCKETS.some((b) => Math.abs(r.b[b]) > 0.01) || Math.abs(r.mv) > 0.01
     const denom = BUCKETS.reduce((s, b) => s + Math.abs(r.b[b]), 0) || 1
-    return { name, ...r, net, gap, tdsPct, gstPct, tops, active, highOthers: Math.abs(r.b.Others) / denom > 0.25 }
+    const md = meta[name] || {}
+    return { name, ...r, net, gap, tdsPct, gstPct, tops, active, highOthers: Math.abs(r.b.Others) / denom > 0.25, ...md }
   })
 
   const zeroTds = all.filter((r) => r.active && Math.abs(r.b.Expenses) > 0 && Math.abs(r.b.TDS) < 1).length
@@ -192,6 +231,7 @@ function partyMatrix(db, { primary, anomaly = 'All', search = '' } = {}) {
   const gaps = all.filter((r) => Math.abs(r.gap) > 1).length
 
   let view = all
+  if (hideZero) view = view.filter((r) => r.active)
   if (anomaly === 'Zero TDS') view = view.filter((r) => r.active && Math.abs(r.b.Expenses) > 0 && Math.abs(r.b.TDS) < 1)
   else if (anomaly === 'Zero GST') view = view.filter((r) => r.active && (Math.abs(r.b.Sales) + Math.abs(r.b.Expenses)) > 0 && Math.abs(r.b.GST) < 1)
   else if (anomaly === 'Balance gap') view = view.filter((r) => Math.abs(r.gap) > 1)
@@ -199,10 +239,25 @@ function partyMatrix(db, { primary, anomaly = 'All', search = '' } = {}) {
   if (search) view = view.filter((r) => r.name.toLowerCase().includes(search.toLowerCase()))
   view = view.sort((a, b) => Math.abs(b.b.Sales + b.b.Purchase + b.b.Expenses) - Math.abs(a.b.Sales + a.b.Purchase + a.b.Expenses))
 
-  const COLS = ['Party', 'Vch', ...BUCKETS, 'TDS %', 'GST %', 'Net', 'Gap', 'Top counter-ledgers']
-  const rows = view.map((r) => [r.name, r.vch, ...BUCKETS.map((b) => r2(r.b[b])), r2(r.tdsPct), r2(r.gstPct), r2(r.net), r2(r.gap), r.tops])
-  const tot = BUCKETS.map((b) => r2(view.reduce((s, r) => s + r.b[b], 0)))
-  rows.push(['TOTAL', view.reduce((s, r) => s + r.vch, 0), ...tot, '', '', r2(view.reduce((s, r) => s + r.net, 0)), r2(view.reduce((s, r) => s + r.gap, 0)), ''])
+  const COLS = ['Party', 'GSTIN', 'PAN', 'State', 'Reg type', 'Vch', ...BUCKETS, 'TDS %', 'GST %', 'Debit', 'Credit', 'Movement', 'Net', 'Gap', 'First', 'Last', 'Top counter-ledgers']
+  const rows = view.map((r) => [r.name, r.gstin || '', r.pan || '', r.state || '', r.regtype || '', r.vch,
+    ...BUCKETS.map((b) => r2(r.b[b])), r2(r.tdsPct), r2(r.gstPct), r2(r.dr), r2(r.cr), r2(r.mv), r2(r.net), r2(r.gap), r.first || '', r.last || '', r.tops])
+  const sum = (f) => r2(view.reduce((s, r) => s + f(r), 0))
+  rows.push(['TOTAL', '', '', '', '', view.reduce((s, r) => s + r.vch, 0),
+    ...BUCKETS.map((b) => sum((r) => r.b[b])), '', '', sum((r) => r.dr), sum((r) => r.cr), sum((r) => r.mv), sum((r) => r.net), sum((r) => r.gap), '', '', ''])
+
+  // ── Sheet: Party × Counter-Ledger pivot (top ledgers by total magnitude) ──
+  const ledTot = {}; for (const r of view) for (const [cn, e] of Object.entries(r.cl)) ledTot[cn] = (ledTot[cn] || 0) + Math.abs(e.amt)
+  const pivotLedgers = Object.entries(ledTot).sort((a, b) => b[1] - a[1]).slice(0, 40).map(([n]) => n)
+  const pivotCols = ['Party', ...pivotLedgers]
+  const pivotRows = view.map((r) => [r.name, ...pivotLedgers.map((cn) => r2(r.cl[cn]?.amt || 0))])
+
+  // ── Sheet: Voucher detail (apportioned per party × voucher) ──
+  const VD_COLS = ['Party', 'Date', 'Type', 'Voucher', 'Party amt', ...BUCKETS, 'Counter-ledgers']
+  const vdNames = new Set(view.map((r) => r.name))
+  const vdRows = vdetail.filter((r) => vdNames.has(r[0])).sort((a, b) => String(a[1]).localeCompare(String(b[1])))
+  const VD_CAP = 8000
+  const vdTrim = vdRows.slice(0, VD_CAP)
 
   const anomalies = []
   for (const r of all) {
@@ -216,15 +271,21 @@ function partyMatrix(db, { primary, anomaly = 'All', search = '' } = {}) {
   return { params: [
     { key: 'primary', type: 'select', label: 'Primary group', options: primaries, value: eff },
     { key: 'anomaly', type: 'chips', label: 'Anomaly', options: ['All', 'Zero TDS', 'Zero GST', 'Balance gap', 'High others'], value: anomaly },
+    { key: 'hideZero', type: 'toggle', label: 'Hide zero-activity parties', value: hideZero },
     { key: 'search', type: 'search', label: 'Party', placeholder: 'Search party…', value: search },
+    { key: 'tdsExtra', type: 'search', label: 'Extra TDS ledgers (comma-sep)', placeholder: 'force-tag as TDS…', value: tdsExtra },
+    { key: 'gstExtra', type: 'search', label: 'Extra GST ledgers (comma-sep)', placeholder: 'force-tag as GST…', value: gstExtra },
+    { key: 'rcmExtra', type: 'search', label: 'Extra RCM ledgers (comma-sep)', placeholder: 'force-tag as RCM…', value: rcmExtra },
   ], sections: [
-      { type: 'note', text: `Each voucher's counter-ledger amounts are pro-rata apportioned to the ${eff} parties on it, bucketed into Sales/Purchase/Expenses/TDS/GST/RCM/Bank/Others. Auto-tagged ledgers — TDS ${tds.size}, GST ${gst.size}, RCM ${rcm.size}. Net = master closing (else period movement); Gap = closing − movement.` },
+      { type: 'note', text: `Each voucher's counter-ledger amounts are pro-rata apportioned to the ${eff} parties on it, bucketed into Sales/Purchase/Expenses/TDS/GST/RCM/Bank/Others. Auto-tagged ledgers — TDS ${tds.size}, GST ${gst.size}, RCM ${rcm.size} (add more via the override boxes). Net = master closing (else period movement); Gap = closing − movement. "Export Excel (all)" writes a 4-sheet workbook: Party matrix, Party × Counter-Ledger pivot, Voucher detail, Anomalies.` },
       { type: 'metrics', items: [
         { l: `${eff} parties`, v: all.length }, { l: 'Active', v: all.filter((r) => r.active).length },
         { l: 'Zero TDS', v: zeroTds, flag: zeroTds > 0 }, { l: 'Zero GST', v: zeroGst, flag: zeroGst > 0 },
         { l: 'Balance gaps', v: gaps, flag: gaps > 0 }, { l: 'Unbalanced vch', v: unbalanced, flag: unbalanced > 0 },
       ] },
       { type: 'table', title: `Party matrix — ${eff}`, columns: COLS, rows },
+      ...(pivotLedgers.length ? [{ type: 'table', title: `Party × Counter-Ledger pivot (top ${pivotLedgers.length})`, columns: pivotCols, rows: pivotRows }] : []),
+      { type: 'table', title: `Voucher detail${vdRows.length > VD_CAP ? ` (first ${VD_CAP} of ${vdRows.length})` : ''}`, columns: VD_COLS, rows: vdTrim },
       ...(anomalies.length ? [{ type: 'table', title: `Anomalies (${anomalies.length})`, columns: ['Anomaly', 'Party', 'Metric', 'Value', 'Note'], rows: anomalies.slice(0, 300) }] : []),
     ] }
 }
