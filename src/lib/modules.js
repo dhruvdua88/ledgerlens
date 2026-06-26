@@ -1,0 +1,270 @@
+// Core-audit modules — ported from FinAnalyzer branch worktree-purchase-register-parity.
+// SIGN CONVENTION (branch): raw signed amount → amount<0 = DEBIT, amount>0 = CREDIT.
+// Opening/closing come from mst_ledger (signed, same convention). All deterministic.
+import { runQuery } from './db.js'
+
+const DB = 'daybook_accounting_lines'
+const dr = (a) => (a < 0 ? -a : 0)
+const cr = (a) => (a > 0 ? a : 0)
+const r2 = (x) => Math.round((Number(x) || 0) * 100) / 100
+const parseBal = (t) => { if (t == null || t === '') return null; const n = parseFloat(String(t).replace(/,/g, '').replace(/[^0-9.\-]/g, '')); return isNaN(n) ? null : n }
+
+function rowsObj(db, sql, keys) {
+  const r = runQuery(db, sql); const idx = {}; r.columns.forEach((c, i) => (idx[c] = i))
+  return r.rows.map((row) => { const o = {}; for (const k of keys) o[k] = row[idx[k]]; return o })
+}
+
+// raw daybook lines as objects (for JS-side modules)
+function lines(db) {
+  return rowsObj(db, `SELECT voucher_guid,voucher_date,voucher_type,voucher_number,narration,party_name,ledger_name,amount,ledger_parent,ledger_primary_group FROM ${DB}`,
+    ['voucher_guid', 'voucher_date', 'voucher_type', 'voucher_number', 'narration', 'party_name', 'ledger_name', 'amount', 'ledger_parent', 'ledger_primary_group'])
+    .map((o) => ({ guid: o.voucher_guid, date: o.voucher_date, vtype: o.voucher_type || '', vno: o.voucher_number || '', narration: o.narration || '', party: o.party_name || '', ledger: o.ledger_name || '', amount: Number(o.amount) || 0, parent: o.ledger_parent || '', primary: o.ledger_primary_group || '' }))
+}
+
+// master ledgers with parsed signed balances + primary group
+function masters(db) {
+  return rowsObj(db, `SELECT l.name AS name, l.parent AS parent, g.primary_group AS pg, l.opening_balance AS ob, l.closing_balance AS cb, l.gstn AS gstn, l.it_pan AS pan
+    FROM mst_ledger l LEFT JOIN mst_group g ON l.parent = g.name`, ['name', 'parent', 'pg', 'ob', 'cb', 'gstn', 'pan'])
+    .map((m) => ({ name: m.name, parent: m.parent || '', primary: m.pg || (m.parent || ''), opening: parseBal(m.ob), closing: parseBal(m.cb), gstn: m.gstn || '', pan: m.pan || '' }))
+}
+
+const groupVouchers = (ls) => { const m = new Map(); for (const l of ls) { const k = l.guid || `${l.vno}|${l.date}|${l.vtype}`; (m.get(k) || m.set(k, []).get(k)).push(l) } return m }
+function resolveParty(legs) {
+  const p = legs.find((l) => l.party && l.party.trim()); if (p) return p.party
+  const dc = legs.find((l) => /debtor|creditor/i.test(l.primary) || /debtor|creditor/i.test(l.parent)); return dc ? dc.ledger : '-'
+}
+
+// ── Accounting Ledger Analytics (master opening/closing + status) ────────
+function classifyStatus(m) {
+  const o = m.opening || 0, c = m.closing || 0
+  if (/debtor/i.test(m.primary) && c < 0) return ['abnormal', 'Abnormal (Cr in Debtor)']
+  if (/creditor/i.test(m.primary) && c > 0) return ['abnormal', 'Abnormal (Dr in Creditor)']
+  if (o === 0 && c === 0) return ['zero', 'Zero balance']
+  if (o === c) return ['slow', 'Slow moving / no change']
+  return ['active', 'Active']
+}
+function ledgerAnalytics(db) {
+  const ms = masters(db).map((m) => { const [st, lbl] = classifyStatus(m); return { ...m, status: st, statusLabel: lbl } })
+  const counts = { abnormal: 0, slow: 0, zero: 0, active: 0 }; ms.forEach((m) => counts[m.status]++)
+  const byLedger = {
+    columns: ['Ledger', 'Primary group', 'Opening', 'Closing', 'Net change', 'Status'],
+    rows: ms.map((m) => [m.name, m.primary, m.opening ?? 0, m.closing ?? 0, r2((m.closing || 0) - (m.opening || 0)), m.statusLabel]),
+  }
+  const grp = {}; for (const m of ms) { const g = (grp[m.primary] ||= { led: 0, ab: 0, sl: 0, ze: 0, net: 0 }); g.led++; if (m.status === 'abnormal') g.ab++; if (m.status === 'slow') g.sl++; if (m.status === 'zero') g.ze++; g.net += m.closing || 0 }
+  const byGroup = { columns: ['Primary group', 'Ledgers', 'Abnormal', 'Slow', 'Zero', 'Net balance'], rows: Object.entries(grp).sort((a, b) => b[1].led - a[1].led).map(([g, v]) => [g, v.led, v.ab, v.sl, v.ze, r2(v.net)]) }
+  return { sections: [
+    { type: 'metrics', items: [{ l: 'Total ledgers', v: ms.length }, { l: 'Abnormal balances', v: counts.abnormal, flag: counts.abnormal > 0 }, { l: 'Slow moving', v: counts.slow }, { l: 'Zero balance', v: counts.zero }] },
+    { type: 'table', title: 'By ledger', ...byLedger },
+    { type: 'table', title: 'By primary group', ...byGroup },
+  ] }
+}
+
+// ── Voucher Book View ────────────────────────────────────────────────────
+function voucherBook(db, { vtype } = {}) {
+  const ls = lines(db)
+  const types = ['All', ...[...new Set(ls.map((l) => l.vtype))].filter(Boolean).sort()]
+  const filt = vtype && vtype !== 'All' ? ls.filter((l) => l.vtype === vtype) : ls
+  const vs = groupVouchers(filt)
+  const rows = []
+  let tDr = 0, tCr = 0, entries = 0
+  for (const [, legs] of vs) {
+    const d = legs.reduce((s, l) => s + dr(l.amount), 0), c = legs.reduce((s, l) => s + cr(l.amount), 0)
+    tDr += d; tCr += c; entries += legs.length
+    const narr = legs.find((l) => l.narration)?.narration || ''
+    rows.push([legs[0].date, legs[0].vtype, legs[0].vno, resolveParty(legs), narr, r2(d), r2(c), legs.length])
+  }
+  rows.sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
+  return { params: [{ key: 'vtype', label: 'Voucher type', options: types, value: vtype || 'All' }],
+    sections: [
+      { type: 'metrics', items: [{ l: 'Vouchers', v: vs.size }, { l: 'Entries', v: entries }, { l: 'Total Dr', v: r2(tDr), money: true }, { l: 'Total Cr', v: r2(tCr), money: true }] },
+      { type: 'table', title: 'Voucher book', columns: ['Date', 'Type', 'Voucher', 'Party', 'Narration', 'Dr', 'Cr', 'Lines'], rows: rows.slice(0, 2000) },
+    ] }
+}
+
+// ── Ledger Statement (opening b/f + running balance + closing c/f + recon) ─
+function ledgerStatement(db, { ledger } = {}) {
+  const ls = lines(db)
+  const names = [...new Set(ls.map((l) => l.ledger))].filter(Boolean).sort()
+  const sel = ledger && names.includes(ledger) ? ledger : names[0]
+  if (!sel) return { sections: [{ type: 'note', text: 'No ledgers.' }] }
+  const m = masters(db).find((x) => x.name === sel)
+  const opening = m?.opening ?? 0
+  // per-voucher net hit on the selected ledger, chronological
+  const byV = new Map()
+  for (const l of ls) if (l.ledger === sel) { const k = l.guid || `${l.vno}|${l.date}`; const e = byV.get(k) || { date: l.date, vtype: l.vtype, vno: l.vno, party: l.party, amt: 0 }; e.amt += l.amount; if (!e.party && l.party) e.party = l.party; byV.set(k, e) }
+  const evs = [...byV.values()].filter((e) => Math.abs(e.amt) > 1e-7).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  let bal = opening
+  const rows = [['—', 'Opening balance b/f', '', '', '', '', r2(opening)]]
+  for (const e of evs) { bal += e.amt; rows.push([e.date, e.party || '-', e.vtype, e.vno, r2(dr(e.amt)), r2(cr(e.amt)), r2(bal)]) }
+  rows.push(['—', 'Closing balance c/f', '', '', '', '', r2(bal)])
+  const periodNet = r2(bal - opening)
+  const refClosing = m?.closing ?? null
+  const reconDiff = refClosing == null ? null : r2(bal - refClosing)
+  return { params: [{ key: 'ledger', label: 'Ledger', options: names, value: sel }],
+    sections: [
+      { type: 'metrics', items: [
+        { l: 'Opening', v: r2(opening), money: true }, { l: 'Period net', v: periodNet, money: true },
+        { l: 'Closing (computed)', v: r2(bal), money: true },
+        ...(reconDiff != null ? [{ l: 'Recon diff vs master', v: reconDiff, money: true, flag: Math.abs(reconDiff) > 0.01 }] : []),
+      ] },
+      { type: 'table', title: `Statement — ${sel}`, columns: ['Date', 'Particulars', 'Type', 'Voucher', 'Dr', 'Cr', 'Balance'], rows },
+    ] }
+}
+
+// ── Party Ledger Transaction Matrix (8-bucket apportionment) ─────────────
+function bucketOf(l) {
+  const n = l.ledger.toLowerCase(), p = (l.primary || '').toLowerCase(), par = (l.parent || '').toLowerCase()
+  if (/tds|194/.test(n)) return 'TDS'
+  if (/igst|cgst|sgst|utgst|gst|cess/.test(n)) return 'GST'
+  if (/rcm|reverse charge/.test(n)) return 'RCM'
+  if (/sale|income/.test(p)) return 'Sales'
+  if (/purchase|inward/.test(p)) return 'Purchase'
+  if (/expense/.test(p)) return 'Expenses'
+  if (/bank/.test(n) || /bank/.test(p) || /bank/.test(par)) return 'Bank'
+  return 'Others'
+}
+const BUCKETS = ['Sales', 'Purchase', 'Expenses', 'TDS', 'GST', 'RCM', 'Bank', 'Others']
+function partyMatrix(db, { primary } = {}) {
+  const ls = lines(db)
+  const primaries = [...new Set(ls.map((l) => l.primary))].filter(Boolean).sort()
+  const eff = primary || primaries.find((p) => /debtor|creditor/i.test(p)) || primaries[0]
+  const vs = groupVouchers(ls)
+  const parties = {} // name -> {buckets, vch}
+  for (const [, legs] of vs) {
+    const partyLegs = legs.filter((l) => l.primary === eff); if (!partyLegs.length) continue
+    const signed = {}; for (const l of partyLegs) signed[l.ledger] = (signed[l.ledger] || 0) + l.amount
+    const absTotal = Object.values(signed).reduce((s, x) => s + Math.abs(x), 0); if (!absTotal) continue
+    const counter = {}; for (const l of legs.filter((l) => l.primary !== eff && l.amount !== 0)) { const b = bucketOf(l); counter[b] = (counter[b] || 0) + l.amount }
+    for (const [pname, ps] of Object.entries(signed)) {
+      const share = Math.abs(ps) / absTotal
+      const row = (parties[pname] ||= { vch: 0, b: Object.fromEntries(BUCKETS.map((k) => [k, 0])) })
+      row.vch++
+      for (const b of BUCKETS) row.b[b] += (counter[b] || 0) * share
+    }
+  }
+  const rows = Object.entries(parties).map(([p, v]) => {
+    const cells = BUCKETS.map((b) => r2(v.b[b]))
+    const tdsPct = Math.abs(v.b.Expenses) > 0 ? r2(Math.abs(v.b.TDS) / Math.abs(v.b.Expenses) * 100) : 0
+    return [p, v.vch, ...cells, tdsPct]
+  }).sort((a, b) => Math.abs(b[2] + b[3] + b[4]) - Math.abs(a[2] + a[3] + a[4]))
+  return { params: [{ key: 'primary', label: 'Primary group', options: primaries, value: eff }],
+    sections: [
+      { type: 'note', text: `Each voucher's counter-ledger amounts are pro-rata apportioned to the ${eff} parties on it, bucketed into Sales/Purchase/Expenses/TDS/GST/RCM/Bank/Others.` },
+      { type: 'metrics', items: [{ l: `${eff} parties`, v: rows.length }, { l: 'Vouchers scanned', v: vs.size }] },
+      { type: 'table', title: `Party matrix — ${eff}`, columns: ['Party', 'Vch', ...BUCKETS, 'TDS %'], rows },
+    ] }
+}
+
+// ── Related Party (RPT) Analysis ─────────────────────────────────────────
+const RPT_KEYWORDS = ['director', 'directors remuneration', 'managerial remuneration', 'kmp', 'promoter', 'subsidiary', 'holding', 'associate', 'joint venture', 'related party', 'partner', 'proprietor']
+function relatedParty(db, params, ctx) {
+  const ls = lines(db)
+  const tagged = new Set((ctx?.relatedLedgers || []).map((s) => s))
+  // auto-suggest by keyword
+  const suggested = new Set()
+  for (const name of new Set(ls.map((l) => l.ledger))) { const n = name.toLowerCase(); if (RPT_KEYWORDS.some((k) => n.includes(k))) suggested.add(name) }
+  const set = tagged.size ? tagged : suggested
+  const maxDate = ls.reduce((m, l) => (l.date > m ? l.date : m), '')
+  const yearEndCut = maxDate ? `${maxDate.slice(0, 8)}01` : '' // crude: same month start (approx 30d)
+  const vs = groupVouchers(ls)
+  const byParty = {}; const findings = []
+  for (const [, legs] of vs) {
+    const pl = legs.filter((l) => set.has(l.ledger)); if (!pl.length) continue
+    const byName = {}; for (const l of pl) byName[l.ledger] = (byName[l.ledger] || 0) + l.amount
+    for (const [pname, amt] of Object.entries(byName)) {
+      const p = (byParty[pname] ||= { vch: 0, dr: 0, cr: 0 }); p.vch++; p.dr += dr(amt); p.cr += cr(amt)
+      const flags = []
+      const isYE = maxDate && legs[0].date >= yearEndCut; if (isYE) flags.push('Year-end')
+      if (Math.abs(amt) % 100000 === 0 && amt !== 0) flags.push('Round amount')
+      if (Math.abs(amt) >= 1000000) flags.push('Material')
+      if (/journal|jv/i.test(legs[0].vtype)) flags.push('Journal')
+      if (flags.length) findings.push([legs[0].date, pname, legs[0].vno, legs[0].vtype, r2(amt), flags.join(', '), (legs.find((l) => l.narration)?.narration || '').slice(0, 40)])
+    }
+  }
+  const ms = masters(db)
+  const partyRows = Object.entries(byParty).map(([p, v]) => { const m = ms.find((x) => x.name === p); return [p, v.vch, r2(v.dr + v.cr), r2(v.dr), r2(v.cr), m?.closing != null ? r2(m.closing) : ''] }).sort((a, b) => b[2] - a[2])
+  const vol = partyRows.reduce((s, r) => s + r[2], 0)
+  return { sections: [
+    { type: 'note', text: `Related parties = your custom "related" group${tagged.size ? '' : ' (none defined — using auto-suggested by name: director/KMP/subsidiary/holding/associate/etc.)'}. Tag precisely via Groups for AS-18 / Sec-188 disclosure.` },
+    { type: 'metrics', items: [{ l: 'Related parties', v: partyRows.length }, { l: 'Aggregate volume', v: r2(vol), money: true }, { l: 'Audit findings', v: findings.length, flag: findings.length > 0 }] },
+    { type: 'table', title: 'By party', columns: ['Party', 'Vch', 'Volume', 'Debits', 'Credits', 'Closing'], rows: partyRows },
+    { type: 'table', title: 'Audit findings', columns: ['Date', 'Party', 'Voucher', 'Type', 'Amount', 'Flags', 'Narration'], rows: findings.slice(0, 500) },
+  ] }
+}
+
+// ── Trial Balance Analysis (opening/during/closing + recon + balance check)
+function classifyActivity(o, d, c, tol) { const ho = Math.abs(o) > tol, hm = d > tol, hc = Math.abs(c) > tol; if (!ho && !hm && !hc) return 'never-used'; if (!ho && hm) return 'new'; if (ho && !hm && hc) return 'dormant'; if (ho && hm && !hc) return 'closed'; return 'active' }
+function trialBalance(db) {
+  const tol = 0.5
+  const mv = {} // ledger -> {dr,cr} during
+  for (const l of lines(db)) { const e = (mv[l.ledger] ||= { dr: 0, cr: 0 }); e.dr += dr(l.amount); e.cr += cr(l.amount) }
+  const ms = masters(db)
+  const rows = []; const act = { dormant: 0, active: 0, new: 0, closed: 0, 'never-used': 0 }; const fails = []
+  let oDr = 0, oCr = 0, dDr = 0, dCr = 0, cDr = 0, cCr = 0
+  for (const m of ms) {
+    const o = m.opening || 0, c = m.closing || 0, d = mv[m.name] || { dr: 0, cr: 0 }
+    const a = classifyActivity(o, d.dr || 0, c, tol); act[a]++
+    const duringNet = (d.cr || 0) - (d.dr || 0), calcClosing = o + duringNet, delta = calcClosing - c
+    if (m.closing != null && Math.abs(delta) > tol) fails.push([m.name, m.primary, r2(o), r2(duringNet), r2(calcClosing), r2(c), r2(delta)])
+    oDr += dr(o); oCr += cr(o); dDr += d.dr || 0; dCr += d.cr || 0; cDr += dr(c); cCr += cr(c)
+    rows.push([m.name, m.primary, a, m.closing != null ? (Math.abs(delta) <= tol ? 'PASS' : `FAIL Δ${r2(delta)}`) : '—', r2(dr(o)), r2(cr(o)), r2(d.dr || 0), r2(d.cr || 0), r2(dr(c)), r2(cr(c))])
+  }
+  rows.sort((a, b) => (Math.abs(b[8] - b[9])) - (Math.abs(a[8] - a[9])))
+  const byGroup = {}; for (const m of ms) { const d = mv[m.name] || { dr: 0, cr: 0 }; const g = (byGroup[m.primary] ||= { led: 0, dDr: 0, dCr: 0, cNet: 0 }); g.led++; g.dDr += d.dr || 0; g.dCr += d.cr || 0; g.cNet += (m.closing || 0) }
+  const grpRows = Object.entries(byGroup).sort((a, b) => Math.abs(b[1].cNet) - Math.abs(a[1].cNet)).map(([g, v]) => [g, v.led, r2(v.dDr), r2(v.dCr), r2(v.cNet)])
+  return { sections: [
+    { type: 'metrics', items: [
+      { l: 'During Dr', v: r2(dDr), money: true }, { l: 'During Cr', v: r2(dCr), money: true },
+      { l: 'During Δ', v: r2(dDr - dCr), money: true, flag: Math.abs(dDr - dCr) > tol },
+      { l: 'Recon failures', v: fails.length, flag: fails.length > 0 },
+    ] },
+    { type: 'note', text: `Activity: ${Object.entries(act).map(([k, v]) => `${k} ${v}`).join(' · ')}. Reconciliation = opening + during = master closing (tolerance ₹0.50).` },
+    { type: 'table', title: 'By primary group', columns: ['Group', 'Ledgers', 'During Dr', 'During Cr', 'Closing net'], rows: grpRows },
+    { type: 'table', title: 'By ledger (opening / during / closing)', columns: ['Ledger', 'Group', 'Activity', 'Recon', 'Op Dr', 'Op Cr', 'Dur Dr', 'Dur Cr', 'Cl Dr', 'Cl Cr'], rows },
+    ...(fails.length ? [{ type: 'table', title: `Reconciliation failures (${fails.length})`, columns: ['Ledger', 'Group', 'Opening', 'During net', 'Calc closing', 'Master closing', 'Delta'], rows: fails }] : []),
+  ] }
+}
+
+// ── Balance Sheet (Schedule III) — NOT on this branch; kept as LedgerLens-native
+const SCH3 = [
+  ["Shareholders' funds", 'EQ', ['Capital Account', 'Reserves & Surplus']],
+  ['Non-current liabilities', 'EQ', ['Loans (Liability)', 'Secured Loans', 'Unsecured Loans']],
+  ['Current liabilities', 'EQ', ['Current Liabilities', 'Sundry Creditors', 'Duties & Taxes', 'Provisions']],
+  ['Fixed assets', 'AS', ['Fixed Assets']],
+  ['Investments', 'AS', ['Investments']],
+  ['Current assets', 'AS', ['Current Assets', 'Sundry Debtors', 'Cash-in-Hand', 'Bank Accounts', 'Stock-in-Hand', 'Bank OD A/c', 'Deposits (Asset)', 'Loans & Advances (Asset)']],
+]
+function balanceSheet(db) {
+  const ms = masters(db)
+  const map = {}; for (const m of ms) if (m.closing != null) map[m.primary] = (map[m.primary] || 0) + m.closing
+  const known = new Set(SCH3.flatMap((x) => x[2]))
+  const buckets = SCH3.map(([name, side, gs]) => ({ name, side, v: r2(gs.reduce((s, g) => s + (map[g] || 0), 0)) }))
+  const other = r2(Object.entries(map).filter(([g]) => !known.has(g)).reduce((s, [, v]) => s + v, 0))
+  const eq = buckets.filter((b) => b.side === 'EQ'), as = buckets.filter((b) => b.side === 'AS')
+  const sEq = eq.reduce((s, b) => s + Math.abs(b.v), 0), sAs = as.reduce((s, b) => s + Math.abs(b.v), 0)
+  return { sections: [
+    { type: 'note', text: 'Ledger closing balances mapped to Schedule III heads. (This module is LedgerLens-native — Schedule III is not on the FinAnalyzer branch.) Verify the tie-out before relying.' },
+    { type: 'metrics', items: [{ l: 'Equity & liabilities', v: r2(sEq), money: true }, { l: 'Assets', v: r2(sAs), money: true }, { l: 'Difference', v: r2(sEq - sAs), money: true, flag: Math.abs(sEq - sAs) > 1 }] },
+    { type: 'table', title: 'Equity & liabilities', columns: ['Head', 'Amount'], rows: eq.map((b) => [b.name, Math.abs(b.v)]) },
+    { type: 'table', title: 'Assets', columns: ['Head', 'Amount'], rows: as.map((b) => [b.name, Math.abs(b.v)]) },
+    ...(Math.abs(other) > 1 ? [{ type: 'table', title: 'Unmapped groups (review)', columns: ['Note', 'Amount'], rows: [['Groups not mapped to Schedule III', other]] }] : []),
+  ] }
+}
+
+export const MODULES = [
+  { id: 'ledger-analytics', label: 'Accounting Ledger Analytics', icon: '▤', run: ledgerAnalytics,
+    desc: 'Per-ledger audit dashboard from master opening/closing balances — flags abnormal (Dr in creditor / Cr in debtor), slow-moving and zero-balance ledgers.' },
+  { id: 'voucher-book', label: 'Voucher Book View', icon: '▥', run: voucherBook,
+    desc: 'Day-book — one row per voucher with party, narration and Dr/Cr totals. Filter by voucher type.' },
+  { id: 'ledger-statement', label: 'Ledger Statement', icon: '▦', run: ledgerStatement,
+    desc: 'Single-ledger statement: opening b/f, per-voucher running balance, closing c/f, and a reconciliation check against the master closing balance.' },
+  { id: 'party-matrix', label: 'Party Ledger Transaction Matrix', icon: '⊞', run: partyMatrix,
+    desc: 'Per-party matrix that apportions each voucher\'s counter-ledgers into Sales / Purchase / Expenses / TDS / GST / RCM / Bank / Others.' },
+  { id: 'rpt', label: 'Related Party (RPT) Analysis', icon: '⚇', run: relatedParty,
+    desc: 'AS-18 / Sec-188 lens — related-party volumes, outstanding balances and per-transaction audit flags (year-end, round-sum, material, journal).' },
+  { id: 'trial-balance', label: 'Trial Balance Analysis', icon: '▣', run: trialBalance,
+    desc: 'Opening + during + closing per ledger with the balance-equation reconciliation (opening + during = master closing) and activity classification.' },
+  { id: 'balance-sheet', label: 'Balance Sheet (Schedule III)', icon: '⚖', run: balanceSheet,
+    desc: 'Ledger closing balances mapped to Schedule III heads (Equity & Liabilities vs Assets) with a tie-out check.' },
+]
+export const moduleById = (id) => MODULES.find((m) => m.id === id)

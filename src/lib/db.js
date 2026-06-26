@@ -57,6 +57,14 @@ export function readCatalog(db) {
   const primaries = uniq(ledgers.map((l) => l.primaryGroup))
   const parents = uniq(ledgers.map((l) => l.parent))
 
+  // distinct voucher types ACTUALLY present in this company's data — these names are
+  // user-defined in Tally and differ across companies, so we read them, never assume.
+  const vtSql = hasDaybook
+    ? `SELECT DISTINCT voucher_type FROM daybook_accounting_lines WHERE voucher_type IS NOT NULL AND voucher_type <> ''`
+    : `SELECT DISTINCT voucher_type FROM trn_voucher WHERE voucher_type IS NOT NULL AND voucher_type <> ''`
+  let voucherTypes = []
+  try { voucherTypes = uniq((db.exec(vtSql)[0]?.values || []).map((r) => r[0])) } catch { /* no vouchers */ }
+
   // stock items (4th group basis)
   let stockItems = []
   try {
@@ -65,7 +73,15 @@ export function readCatalog(db) {
     }
   } catch { /* no stock items */ }
 
-  return { hasDaybook, ledgers, parties, primaries, parents, stockItems }
+  return { hasDaybook, ledgers, parties, primaries, parents, stockItems, voucherTypes }
+}
+
+// Company name from the Tally export metadata (falls back to null).
+export function readCompany(db) {
+  const q = (sql) => { try { return db.exec(sql)[0]?.values?.[0]?.[0] || null } catch { return null } }
+  return q("SELECT value FROM _export_info WHERE name='company_name' LIMIT 1")
+    || q("SELECT value FROM config WHERE name='Company Name' LIMIT 1")
+    || null
 }
 
 // Schema text (table -> columns) for the system prompt. Hides _llm_* helper tables.

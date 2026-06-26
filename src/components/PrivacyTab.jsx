@@ -9,7 +9,7 @@ export default function PrivacyTab({ schema, mask, catalog, groups }) {
   if (!schema || !mask) return <div className="body"><div className="empty">Load data first.</div></div>
 
   const resolved = catalog ? resolveTokens(groups || [], catalog, mask) : []
-  const system = buildSystemPrompt(schema, mask, resolved)
+  const system = buildSystemPrompt(schema, mask, resolved, catalog)
   const masked = maskQuestion(q, mask)
   const payload = JSON.stringify({ model: '…', messages: [{ role: 'system', content: system.slice(0, 0) + '[schema + masked catalog]' }, { role: 'user', content: masked }] }, null, 2)
 

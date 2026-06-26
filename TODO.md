@@ -92,12 +92,47 @@ Reformat assistant (separate writer model):
 - [x] Broadened amount-column regex (turnover/gross/sum/…) — fixes table display too
 - [x] Verified: local qwen2.5:3b drafts correct client email (₹164.77 Crore); Chrome Nano falls back cleanly
 
-## Phase 3 — port FinAnalyzer modules (copy LATER, design schema first)
-- [ ] Ledger Statement
-- [ ] Party Ledger Transaction Matrix
-- [ ] Voucher Book View
-- [ ] (reuse FinAnalyzer styling but apply design-critique fixes: local-first hero state,
-      3-tier hierarchy, one accent color, single Indian number format)
+## Phase 7 — threaded replies + question improver + intuitive UI  ✅ DONE
+- [x] Threaded per-result replies: each SQL result is a parent; prose replies nest under it (left rail + indent)
+- [x] Per-result inline composer "↳ Ask about this result…" — your OWN prompt against that specific result
+- [x] Removed Auto/SQL/Ask toggle — intent from location (reply = reformat, bottom box = new SQL)
+- [x] Quick buttons (Summarize/Email/Explain) still on each result
+- [x] Question improver (improve.js): ✨ Improve sharpens your question, ✨ Suggest when empty
+      - Assistant tier (Chrome→local→DeepSeek), sends only question + generic vocab (no client names)
+      - Returns improved + why + 3 alternatives, one-click to use
+- [x] Intuitive empty state: 3-step explainer (Ask → see SQL+result → reply to refine)
+- [x] Verified live on local Arctic + qwen: threaded reply linked via sourceId, improver returns suggestions
+- NOTE: qwen 3b prose can mis-order; use a bigger local writer or DeepSeek assistant for higher-stakes emails
+
+## Demo ops
+- [x] scripts/*.command — one-click START-DEMO / STOP-DEMO + individual ollama/app start-stop
+- Storage: all app state in browser localStorage (per origin); DB in tab RAM only; ollama models in ~/.ollama
+
+## Phase 3 — FinAnalyzer modules  ✅ DONE (reimplemented native over SQLite daybook)
+"Core audit" sidebar section, deterministic (no LLM), each via SQL on daybook_accounting_lines:
+- [x] Accounting Ledger Analytics — per-ledger Dr/Cr/Net/vouchers/first-last
+- [x] Voucher Book View — one row per voucher, filter by type
+- [x] Ledger Statement — ledger picker + chronological lines + running balance
+- [x] Party Ledger Transaction Matrix — party × month turnover pivot
+- [x] Related Party (RPT) Analysis — auto-flag by group+name + user "related" groups (ctx)
+- [x] Trial Balance Analysis — Dr/Cr/Net by ledger + group, balanced-check (diff ₹0 ✓)
+- [x] Balance Sheet (Schedule III) — closing balances mapped to Sch III heads + tie check
+- Framework: lib/modules.js (MODULES registry) + components/ModuleView.jsx (metrics/table/note + param controls + per-table Excel export)
+- Verified live on Cache sample: all 7 run clean; TB balances; ledger picker switches; matrix pivots
+- NOTE: source was FinAnalyzer-CSV-Version (TS/CSV); logic reimplemented over SQLite, not copied verbatim
+
+## Phase 3.5 — FinAnalyzer EXACT look & feel + styled Excel  ✅ DONE
+- [x] Module UI restyled to FinAnalyzer's design (slate/Tailwind values as scoped .fa-* CSS):
+      icon header + description sentence, white rounded-xl metric cards (uppercase labels,
+      font-800 numbers, coloured icon chips), green "Export Excel" button, slate table cards
+- [x] Per-module description sentences (FinAnalyzer pattern) added to MODULES
+- [x] Styled Excel via xlsx-js-style (excelStyle.js): deep-slate title band, slate column-header
+      row, Indian accounting number format (lakh/crore, parentheses-neg, Nil), zebra body,
+      autofilter, freeze header — mirrors FinAnalyzer excelStyles PALETTE/NUMFMT
+- [x] Per-table export + header "Export Excel (all)" → one sheet per table
+- [x] Verified live: Ledger Analytics renders FinAnalyzer-style; export builds + downloads no error
+- SCOPE: matches FinAnalyzer's design system + styled workbooks across all 7 modules; NOT a
+  byte-identical port of each module's bespoke internals (e.g. TB collapsible tree). Deepen on request.
 
 ## Design notes (from /design-critique on FinAnalyzer)
 - Local-first is the FEATURE — green "data stays on device" badge, never a yellow warning.

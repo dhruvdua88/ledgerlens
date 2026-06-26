@@ -507,3 +507,48 @@ details summary:hover { color: var(--purple); }
 .prosecard .bar { display: flex; align-items: center; gap: 12px; padding: 7px 12px; background: var(--purple-50); font-size: 12px; color: var(--text-2); }
 .prosecard .bar .ok { color: var(--purple-700); font-weight: 500; }
 .prosecard .prose { padding: 14px 16px; font-size: 14px; line-height: 1.65; white-space: pre-wrap; color: var(--text); }
+
+/* ── Threaded replies under a result ─────────────────────────────────────── */
+.thread { margin: 10px 0 0 4px; padding-left: 16px; border-left: 2px solid var(--purple-100); display: flex; flex-direction: column; gap: 10px; }
+.reply .reply-you { font-size: 12.5px; color: var(--purple-700); font-weight: 500; }
+.reply-box { display: flex; gap: 8px; align-items: center; }
+.reply-box input { flex: 1; font-size: 13px; padding: 8px 11px; border: 0.5px solid var(--border-2); border-radius: var(--r-sm); font-family: var(--sans); }
+.reply-box input:focus { outline: none; border-color: var(--purple); box-shadow: 0 0 0 3px var(--purple-ring); }
+
+/* ── Onboarding steps in empty state ─────────────────────────────────────── */
+.steps { display: flex; flex-direction: column; gap: 6px; max-width: 420px; margin: 18px auto 4px; text-align: left; }
+.step { font-size: 13px; color: var(--text-2); display: flex; gap: 10px; align-items: center; }
+.step b { width: 20px; height: 20px; flex-shrink: 0; border-radius: 50%; background: var(--purple-100); color: var(--purple-700); display: grid; place-items: center; font-size: 11px; font-weight: 600; }
+
+/* ── Improve / suggest panel ─────────────────────────────────────────────── */
+.improve-panel { margin: 0 20px; padding: 12px 14px; background: var(--purple-50); border: 0.5px solid var(--purple-100); border-radius: var(--r-md); }
+.improve-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; font-size: 13.5px; }
+.improve-tag { font-size: 11px; font-weight: 600; color: var(--purple-700); background: #fff; border: 0.5px solid var(--purple-100); padding: 1px 7px; border-radius: var(--r-pill); margin-right: 6px; }
+
+/* ── FinAnalyzer look-and-feel (Core audit modules) — slate/Tailwind exact ─ */
+.fa { --s900:#0f172a; --s700:#334155; --s600:#475569; --s400:#94a3b8; --s200:#e2e8f0; --s100:#f1f5f9; --s50:#f8fafc; }
+.fa-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px; }
+.fa-head .ic { width:44px; height:44px; border-radius:12px; background:#eff6ff; color:#2563eb; display:grid; place-items:center; flex-shrink:0; font-size:20px; }
+.fa-head h2 { font-size:20px; font-weight:800; color:#0f172a; margin:0; letter-spacing:-0.01em; }
+.fa-head p { font-size:13.5px; color:#475569; margin:3px 0 0; line-height:1.5; max-width:64ch; }
+.fa-export { background:#059669; color:#fff; border:none; border-radius:10px; padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer; display:inline-flex; gap:7px; align-items:center; white-space:nowrap; box-shadow:0 1px 2px rgba(5,150,105,.25); }
+.fa-export:hover { background:#047857; }
+.fa-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px; margin-bottom:20px; }
+.fa-card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:18px 20px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+.fa-card .top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; }
+.fa-card .chip { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; font-size:16px; }
+.fa-card .lbl { font-size:11px; font-weight:700; color:#94a3b8; text-transform:uppercase; letter-spacing:.08em; }
+.fa-card .val { font-size:26px; font-weight:800; color:#0f172a; line-height:1.1; margin-top:4px; }
+.fa-card.red .val { color:#dc2626; } .fa-card.amber .val { color:#d97706; } .fa-card.green .val { color:#059669; }
+.fa-card .chip.blue{background:#eff6ff;color:#2563eb;} .fa-card .chip.red{background:#fef2f2;color:#dc2626;} .fa-card .chip.amber{background:#fffbeb;color:#d97706;} .fa-card .chip.slate{background:#f8fafc;color:#94a3b8;} .fa-card .chip.green{background:#ecfdf5;color:#059669;}
+.fa-tcard { background:#fff; border:1px solid #e2e8f0; border-radius:14px; box-shadow:0 1px 2px rgba(15,23,42,.04); overflow:hidden; margin-bottom:18px; }
+.fa-tcard .thead { display:flex; align-items:center; justify-content:space-between; padding:12px 18px; border-bottom:1px solid #e2e8f0; }
+.fa-tcard .thead .t { font-size:14px; font-weight:700; color:#0f172a; }
+.fa-tcard .thead .n { font-size:12px; color:#94a3b8; font-weight:500; }
+.fa-tbl-wrap { overflow:auto; max-height:520px; }
+table.fa-tbl { width:100%; border-collapse:collapse; font-size:13px; }
+table.fa-tbl th { position:sticky; top:0; background:#f8fafc; color:#475569; font-weight:700; text-align:left; padding:9px 14px; border-bottom:1px solid #e2e8f0; white-space:nowrap; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+table.fa-tbl th.num, table.fa-tbl td.num { text-align:right; font-variant-numeric:tabular-nums; }
+table.fa-tbl td { padding:9px 14px; border-bottom:1px solid #f1f5f9; color:#0f172a; white-space:nowrap; }
+table.fa-tbl tr:hover td { background:#f8fafc; }
+.fa-note { background:#eff6ff; border:1px solid #dbeafe; color:#1e40af; font-size:12.5px; padding:10px 14px; border-radius:10px; margin-bottom:16px; }

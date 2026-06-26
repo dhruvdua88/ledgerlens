@@ -11,9 +11,10 @@ import { resolveTokens } from './groups.js'
 // Build everything that would be sent to an LLM, WITHOUT calling one.
 // Used by the chat pipeline AND the manual "copy prompt" module.
 export function buildPrompt({ schema, mask, catalog, groups, activeGroupIds, question, prior = [] }) {
+  const scoped = !!(activeGroupIds && activeGroupIds.length)
   const active = (groups || []).filter((g) => !activeGroupIds || activeGroupIds.includes(g.id))
   const resolved = resolveTokens(active, catalog, mask)
-  const system = buildSystemPrompt(schema, mask, resolved)
+  const system = buildSystemPrompt(schema, mask, resolved, catalog, { scoped })
   const maskedQ = maskQuestion(question, mask)
   const messages = buildMessages(system, maskedQ, prior)
   return { system, maskedQuestion: maskedQ, messages, resolvedGroups: resolved }

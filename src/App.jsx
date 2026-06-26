@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { openSample, openSqlite, readCatalog, readSchema } from './lib/db.js'
+import { openSample, openSqlite, readCatalog, readSchema, readCompany } from './lib/db.js'
 import { buildMask } from './lib/mask.js'
 import { ask } from './lib/pipeline.js'
 import { DEFAULT_MODEL, DEFAULT_USDINR } from './lib/pricing.js'
@@ -15,6 +15,9 @@ import ProfileTab from './components/ProfileTab.jsx'
 import { loadSavedQueries, persistSavedQueries, makeSavedQuery } from './lib/profile.js'
 import { loadHistory, saveHistory, clearHistory, turnId, priorContext } from './lib/history.js'
 import { resolveAssistant, reformat, REFORMAT_MODES } from './lib/assistant.js'
+import { improveQuestion } from './lib/improve.js'
+import ModuleView from './components/ModuleView.jsx'
+import { MODULES, moduleById } from './lib/modules.js'
 
 const LS = {
   key: 'll_deepseek_key', model: 'll_model', cost: 'll_cost_log', rate: 'll_usdinr',
@@ -62,6 +65,7 @@ export default function App() {
   const [mask, setMask] = useState(null)
   const [catalog, setCatalog] = useState(null)
   const [meta, setMeta] = useState({ ledgers: 0, parties: 0 })
+  const [company, setCompany] = useState('Cache Digitech Pvt. Ltd')
   const [companyKey, setCompanyKey] = useState('cache_digitech')
   const [history, setHistory] = useState(() => loadHistory('cache_digitech'))
   const [groups, setGroups] = useState(() => loadGroups())
@@ -74,14 +78,18 @@ export default function App() {
   })
   const activeModel = settings.provider === 'local' ? settings.localModel : settings.model
 
-  async function loadDb(database) {
+  // fallbackName used when the export has no company_name metadata (e.g. the bundled sample)
+  async function loadDb(database, fallbackName) {
     const cat = readCatalog(database)
+    const name = readCompany(database) || fallbackName || 'Loaded database'
+    const ck = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'db'
     setDb(database); setCatalog(cat)
     setSchema(readSchema(database))
     setMask(buildMask(cat))
     setMeta({ ledgers: cat.ledgers.length, parties: cat.parties.length })
+    setCompany(name); setCompanyKey(ck); setHistory(loadHistory(ck))
   }
-  useEffect(() => { openSample().then(loadDb).catch((e) => console.error('sample load', e)) }, [])
+  useEffect(() => { openSample().then((d) => loadDb(d, 'Cache Digitech Pvt. Ltd')).catch((e) => console.error('sample load', e)) }, [])
 
   const pushTurn = useCallback((turn) => {
     setHistory((prev) => { const next = [...prev, turn]; saveHistory(companyKey, next); return next })
@@ -115,6 +123,16 @@ export default function App() {
   function deleteTurn(id) {
     setHistory((prev) => { const next = prev.filter((t) => t.id !== id); saveHistory(companyKey, next); return next })
   }
+
+  // Improve / suggest questions via the Assistant model (no client names sent).
+  const onImprove = useCallback(async (question) => {
+    const a = await resolveAssistant(settings)
+    return improveQuestion({
+      question,
+      vocabCtx: { primaries: catalog?.primaries || [], groupNames: groups.map((g) => g.name) },
+      assistant: a,
+    })
+  }, [settings, catalog, groups])
 
   // Reformat a result into prose (summary / email / explain / free-text) via the Assistant model.
   const onReformat = useCallback(async (sourceTurn, modeOrText) => {
@@ -168,9 +186,8 @@ export default function App() {
     const file = e.target.files?.[0]; if (!file) return
     const buf = await file.arrayBuffer()
     try {
-      await loadDb(await openSqlite(buf))
-      const ck = file.name.replace(/\.(sqlite|db)$/i, '')
-      setCompanyKey(ck); setHistory(loadHistory(ck))
+      await loadDb(await openSqlite(buf), file.name.replace(/\.(sqlite|db)$/i, ''))
+      setTab('chat')
     } catch (err) { alert('Could not open file: ' + err.message) }
   }
 
@@ -203,6 +220,13 @@ export default function App() {
         ))}
         <div className="nav nav-add" onClick={() => setTab('groups')}>＋ New / manage groups</div>
 
+        <div className="sec">Core audit</div>
+        {MODULES.map((m) => (
+          <div key={m.id} className={`nav ${tab === 'mod:' + m.id ? 'on' : ''}`} onClick={() => setTab('mod:' + m.id)}>
+            <span style={{ width: 16, display: 'inline-block' }}>{tab === 'mod:' + m.id ? '▸' : '·'}</span>{m.label}
+          </div>
+        ))}
+
         <div className="sec">Privacy & cost</div>
         <Nav id="profile" label="Profile" count={savedQueries.length} />
         <Nav id="privacy" label="Privacy" />
@@ -220,8 +244,8 @@ export default function App() {
       <main className="main">
         <div className="topbar">
           <div>
-            <div className="ttl">{TITLES[tab]}</div>
-            <div className="sub">{ready ? `Cache Digitech Pvt. Ltd · ${meta.ledgers} ledgers · ${meta.parties} parties · ${groups.length} groups` : 'Loading sample data…'}</div>
+            <div className="ttl">{tab.startsWith('mod:') ? (moduleById(tab.slice(4))?.label || 'Module') : TITLES[tab]}</div>
+            <div className="sub">{ready ? `${company} · ${meta.ledgers} ledgers · ${meta.parties} parties · ${groups.length} groups` : 'Loading sample data…'}</div>
           </div>
           {(() => {
             const local = settings.provider === 'local'
@@ -234,13 +258,18 @@ export default function App() {
           })()}
         </div>
 
-        {tab === 'chat' && <ChatPanel ready={ready} history={history} model={activeModel} rate={settings.rate} free={settings.provider === 'local'} groups={groups} onAsk={onAsk} onReformat={onReformat} onSaveQuery={saveQuery} onClearChat={clearChat} onDeleteTurn={deleteTurn} pending={pending} onConsumePending={() => setPending(null)} />}
+        {tab === 'chat' && <ChatPanel ready={ready} history={history} model={activeModel} rate={settings.rate} free={settings.provider === 'local'} groups={groups} onAsk={onAsk} onReformat={onReformat} onImprove={onImprove} onSaveQuery={saveQuery} onClearChat={clearChat} onDeleteTurn={deleteTurn} pending={pending} onConsumePending={() => setPending(null)} />}
         {tab === 'manual' && <ManualTab db={db} schema={schema} mask={mask} catalog={catalog} groups={groups} />}
         {tab === 'groups' && <GroupManager catalog={catalog} groups={groups} onSave={upsertGroup} onDelete={deleteGroup} />}
-        {tab === 'profile' && <ProfileTab groups={groups} savedQueries={savedQueries} prefs={settings} company="Cache Digitech Pvt. Ltd" onImported={onProfileImported} onDeleteQuery={deleteQuery} onRunQuery={runSavedQuery} />}
+        {tab === 'profile' && <ProfileTab groups={groups} savedQueries={savedQueries} prefs={settings} company={company} onImported={onProfileImported} onDeleteQuery={deleteQuery} onRunQuery={runSavedQuery} />}
         {tab === 'privacy' && <PrivacyTab schema={schema} mask={mask} catalog={catalog} groups={groups} />}
         {tab === 'cost' && <CostTab log={costLog} rate={settings.rate} onClear={clearCost} />}
         {tab === 'settings' && <SettingsTab settings={settings} onSave={saveSettings} />}
+        {tab.startsWith('mod:') && (
+          <ModuleView db={db} module={moduleById(tab.slice(4))} ctx={{
+            relatedLedgers: catalog ? groups.filter((g) => /relat|associat|sister|subsidiar|holding/i.test(g.name)).flatMap((g) => resolveGroup(g, catalog).ledgers) : [],
+          }} />
+        )}
       </main>
     </div>
   )
