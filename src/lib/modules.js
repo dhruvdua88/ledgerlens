@@ -126,50 +126,106 @@ function ledgerStatement(db, { ledger } = {}) {
     ] }
 }
 
-// ── Party Ledger Transaction Matrix (8-bucket apportionment) ─────────────
-function bucketOf(l) {
+// ── Party Ledger Transaction Matrix (full FinAnalyzer processor) ─────────
+const BUCKETS = ['Sales', 'Purchase', 'Expenses', 'TDS', 'GST', 'RCM', 'Bank', 'Others']
+const isPlPrimary = (p) => /sale|income|purchase|inward|expense/i.test(p || '')
+function bucketFor(l, tds, gst, rcm) {
   const n = l.ledger.toLowerCase(), p = (l.primary || '').toLowerCase(), par = (l.parent || '').toLowerCase()
-  if (/tds|194/.test(n)) return 'TDS'
-  if (/igst|cgst|sgst|utgst|gst|cess/.test(n)) return 'GST'
-  if (/rcm|reverse charge/.test(n)) return 'RCM'
+  if (tds.has(l.ledger)) return 'TDS'
+  if (gst.has(l.ledger)) return 'GST'
+  if (rcm.has(l.ledger)) return 'RCM'
   if (/sale|income/.test(p)) return 'Sales'
   if (/purchase|inward/.test(p)) return 'Purchase'
   if (/expense/.test(p)) return 'Expenses'
   if (/bank/.test(n) || /bank/.test(p) || /bank/.test(par)) return 'Bank'
   return 'Others'
 }
-const BUCKETS = ['Sales', 'Purchase', 'Expenses', 'TDS', 'GST', 'RCM', 'Bank', 'Others']
-function partyMatrix(db, { primary, search = '' } = {}) {
+function partyMatrix(db, { primary, anomaly = 'All', search = '' } = {}) {
   const ls = lines(db)
+  const ms = masters(db)
+  const closeBy = {}; for (const m of ms) if (m.closing != null) closeBy[m.name] = m.closing
+  const primaryOf = {}; for (const l of ls) if (!(l.ledger in primaryOf)) primaryOf[l.ledger] = l.primary
   const primaries = [...new Set(ls.map((l) => l.primary))].filter(Boolean).sort()
   const eff = primary || primaries.find((p) => /debtor|creditor/i.test(p)) || primaries[0]
-  const sq = search.toLowerCase()
+  // auto-tag TDS / GST / RCM ledgers by name (excluding P&L-primary ledgers)
+  const allLedgers = [...new Set(ls.map((l) => l.ledger))]
+  const tag = (re) => new Set(allLedgers.filter((n) => re.test(n) && !isPlPrimary(primaryOf[n])))
+  const tds = tag(/tds|194/i), gst = tag(/igst|cgst|sgst|utgst|gst|cess/i), rcm = tag(/rcm|reverse charge/i)
+
   const vs = groupVouchers(ls)
-  const parties = {} // name -> {buckets, vch}
+  const P = {}; let unbalanced = 0
   for (const [, legs] of vs) {
+    if (Math.abs(legs.reduce((s, l) => s + l.amount, 0)) > 0.01) unbalanced++
     const partyLegs = legs.filter((l) => l.primary === eff); if (!partyLegs.length) continue
     const signed = {}; for (const l of partyLegs) signed[l.ledger] = (signed[l.ledger] || 0) + l.amount
     const absTotal = Object.values(signed).reduce((s, x) => s + Math.abs(x), 0); if (!absTotal) continue
-    const counter = {}; for (const l of legs.filter((l) => l.primary !== eff && l.amount !== 0)) { const b = bucketOf(l); counter[b] = (counter[b] || 0) + l.amount }
+    const cB = {}, cL = {}
+    for (const l of legs) {
+      if (l.primary === eff || l.amount === 0) continue
+      const b = bucketFor(l, tds, gst, rcm)
+      cB[b] = (cB[b] || 0) + l.amount
+      const e = (cL[l.ledger] ||= { amt: 0, b }); e.amt += l.amount
+    }
     for (const [pname, ps] of Object.entries(signed)) {
       const share = Math.abs(ps) / absTotal
-      const row = (parties[pname] ||= { vch: 0, b: Object.fromEntries(BUCKETS.map((k) => [k, 0])) })
-      row.vch++
-      for (const b of BUCKETS) row.b[b] += (counter[b] || 0) * share
+      const r = (P[pname] ||= { vch: 0, mv: 0, b: Object.fromEntries(BUCKETS.map((k) => [k, 0])), cl: {} })
+      r.vch++; r.mv += ps
+      for (const b of BUCKETS) r.b[b] += (cB[b] || 0) * share
+      for (const [cn, e] of Object.entries(cL)) { const x = (r.cl[cn] ||= { amt: 0, b: e.b }); x.amt += e.amt * share }
     }
   }
-  const rows = Object.entries(parties).filter(([p]) => !sq || p.toLowerCase().includes(sq)).map(([p, v]) => {
-    const cells = BUCKETS.map((b) => r2(v.b[b]))
-    const tdsPct = Math.abs(v.b.Expenses) > 0 ? r2(Math.abs(v.b.TDS) / Math.abs(v.b.Expenses) * 100) : 0
-    return [p, v.vch, ...cells, tdsPct]
-  }).sort((a, b) => Math.abs(b[2] + b[3] + b[4]) - Math.abs(a[2] + a[3] + a[4]))
+
+  const all = Object.entries(P).map(([name, r]) => {
+    const net = Number.isFinite(closeBy[name]) ? closeBy[name] : r.mv
+    const gap = net - r.mv
+    const tdsPct = Math.abs(r.b.Expenses) > 0 ? Math.abs(r.b.TDS) / Math.abs(r.b.Expenses) * 100 : 0
+    const gstPct = (Math.abs(r.b.Sales) + Math.abs(r.b.Expenses)) > 0 ? Math.abs(r.b.GST) / (Math.abs(r.b.Sales) + Math.abs(r.b.Expenses)) * 100 : 0
+    const tops = Object.entries(r.cl).filter(([, e]) => ['Sales', 'Purchase', 'Expenses', 'Others'].includes(e.b))
+      .sort((a, b) => Math.abs(b[1].amt) - Math.abs(a[1].amt)).slice(0, 3).map(([n]) => n).join(', ')
+    const active = BUCKETS.some((b) => Math.abs(r.b[b]) > 0.01) || Math.abs(r.mv) > 0.01
+    const denom = BUCKETS.reduce((s, b) => s + Math.abs(r.b[b]), 0) || 1
+    return { name, ...r, net, gap, tdsPct, gstPct, tops, active, highOthers: Math.abs(r.b.Others) / denom > 0.25 }
+  })
+
+  const zeroTds = all.filter((r) => r.active && Math.abs(r.b.Expenses) > 0 && Math.abs(r.b.TDS) < 1).length
+  const zeroGst = all.filter((r) => r.active && (Math.abs(r.b.Sales) + Math.abs(r.b.Expenses)) > 0 && Math.abs(r.b.GST) < 1).length
+  const gaps = all.filter((r) => Math.abs(r.gap) > 1).length
+
+  let view = all
+  if (anomaly === 'Zero TDS') view = view.filter((r) => r.active && Math.abs(r.b.Expenses) > 0 && Math.abs(r.b.TDS) < 1)
+  else if (anomaly === 'Zero GST') view = view.filter((r) => r.active && (Math.abs(r.b.Sales) + Math.abs(r.b.Expenses)) > 0 && Math.abs(r.b.GST) < 1)
+  else if (anomaly === 'Balance gap') view = view.filter((r) => Math.abs(r.gap) > 1)
+  else if (anomaly === 'High others') view = view.filter((r) => r.highOthers)
+  if (search) view = view.filter((r) => r.name.toLowerCase().includes(search.toLowerCase()))
+  view = view.sort((a, b) => Math.abs(b.b.Sales + b.b.Purchase + b.b.Expenses) - Math.abs(a.b.Sales + a.b.Purchase + a.b.Expenses))
+
+  const COLS = ['Party', 'Vch', ...BUCKETS, 'TDS %', 'GST %', 'Net', 'Gap', 'Top counter-ledgers']
+  const rows = view.map((r) => [r.name, r.vch, ...BUCKETS.map((b) => r2(r.b[b])), r2(r.tdsPct), r2(r.gstPct), r2(r.net), r2(r.gap), r.tops])
+  const tot = BUCKETS.map((b) => r2(view.reduce((s, r) => s + r.b[b], 0)))
+  rows.push(['TOTAL', view.reduce((s, r) => s + r.vch, 0), ...tot, '', '', r2(view.reduce((s, r) => s + r.net, 0)), r2(view.reduce((s, r) => s + r.gap, 0)), ''])
+
+  const anomalies = []
+  for (const r of all) {
+    if (r.active && Math.abs(r.b.Expenses) > 0 && Math.abs(r.b.TDS) < 1) anomalies.push(['Zero TDS', r.name, 'Expenses', r2(r.b.Expenses), 'Expense booked, no TDS deducted'])
+    if (r.active && (Math.abs(r.b.Sales) + Math.abs(r.b.Expenses)) > 0 && Math.abs(r.b.GST) < 1) anomalies.push(['Zero GST', r.name, 'Sales+Exp', r2(Math.abs(r.b.Sales) + Math.abs(r.b.Expenses)), 'Taxable activity, no GST line'])
+    if (Math.abs(r.gap) > 1) anomalies.push(['Balance gap', r.name, 'Net−Movement', r2(r.gap), 'Closing balance ≠ period movement'])
+    if (r.highOthers) anomalies.push(['High others', r.name, 'Others', r2(Math.abs(r.b.Others)), 'Unclassified > 25% of activity'])
+  }
+  anomalies.sort((a, b) => Math.abs(Number(b[3]) || 0) - Math.abs(Number(a[3]) || 0))
+
   return { params: [
-    { key: 'search', type: 'search', label: 'Search', placeholder: 'Party…', value: search },
     { key: 'primary', type: 'select', label: 'Primary group', options: primaries, value: eff },
+    { key: 'anomaly', type: 'chips', label: 'Anomaly', options: ['All', 'Zero TDS', 'Zero GST', 'Balance gap', 'High others'], value: anomaly },
+    { key: 'search', type: 'search', label: 'Party', placeholder: 'Search party…', value: search },
   ], sections: [
-      { type: 'note', text: `Each voucher's counter-ledger amounts are pro-rata apportioned to the ${eff} parties on it, bucketed into Sales/Purchase/Expenses/TDS/GST/RCM/Bank/Others.` },
-      { type: 'metrics', items: [{ l: `${eff} parties`, v: rows.length }, { l: 'Vouchers scanned', v: vs.size }] },
-      { type: 'table', title: `Party matrix — ${eff}`, columns: ['Party', 'Vch', ...BUCKETS, 'TDS %'], rows },
+      { type: 'note', text: `Each voucher's counter-ledger amounts are pro-rata apportioned to the ${eff} parties on it, bucketed into Sales/Purchase/Expenses/TDS/GST/RCM/Bank/Others. Auto-tagged ledgers — TDS ${tds.size}, GST ${gst.size}, RCM ${rcm.size}. Net = master closing (else period movement); Gap = closing − movement.` },
+      { type: 'metrics', items: [
+        { l: `${eff} parties`, v: all.length }, { l: 'Active', v: all.filter((r) => r.active).length },
+        { l: 'Zero TDS', v: zeroTds, flag: zeroTds > 0 }, { l: 'Zero GST', v: zeroGst, flag: zeroGst > 0 },
+        { l: 'Balance gaps', v: gaps, flag: gaps > 0 }, { l: 'Unbalanced vch', v: unbalanced, flag: unbalanced > 0 },
+      ] },
+      { type: 'table', title: `Party matrix — ${eff}`, columns: COLS, rows },
+      ...(anomalies.length ? [{ type: 'table', title: `Anomalies (${anomalies.length})`, columns: ['Anomaly', 'Party', 'Metric', 'Value', 'Note'], rows: anomalies.slice(0, 300) }] : []),
     ] }
 }
 
