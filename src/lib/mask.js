@@ -8,6 +8,30 @@
 
 const TOK = (prefix, i) => `@@${prefix}${i}@@`
 
+// Generic accounting / query words. These appear inside ledger names ('Sales Accounts',
+// 'Cash-in-hand') and some are the WHOLE name of a reserved ledger ('Cash', 'Depreciation',
+// 'Rent', 'Wages', 'Interest'). In a question they are generic nouns/verbs, NOT a client
+// identity the user means to filter to. Masking them mis-narrows the query to one ledger and
+// is never needed for privacy (these are not client names). So we never tokenise them — neither
+// as a single name-word (step 2) nor as a whole-name substring match (step 1).
+const COMMON_WORDS = new Set(['sales', 'sale', 'purchase', 'purchases', 'cash', 'bank', 'tax',
+  'taxes', 'gst', 'igst', 'cgst', 'sgst', 'tds', 'duty', 'duties', 'output', 'input', 'expense',
+  'expenses', 'income', 'incomes', 'interest', 'salary', 'wages', 'rent', 'journal', 'payment',
+  'payments', 'receipt', 'receipts', 'contra', 'invoice', 'invoices', 'voucher', 'vouchers',
+  'party', 'parties', 'customer', 'customers', 'vendor', 'vendors', 'debtor', 'debtors',
+  'creditor', 'creditors', 'sundry', 'stock', 'inventory', 'item', 'items', 'ledger', 'ledgers',
+  'account', 'accounts', 'opening', 'closing', 'balance', 'net', 'gross', 'total', 'turnover',
+  'month', 'monthly', 'year', 'yearly', 'quarter', 'date', 'amount', 'value', 'goods', 'capital',
+  'asset', 'assets', 'liability', 'liabilities', 'provision', 'provisions', 'loan', 'loans',
+  'fixed', 'current', 'direct', 'indirect', 'reverse', 'charge', 'professional', 'contractor',
+  'depreciation'])
+
+// true when a whole entity name is a single generic word — don't mask it (see COMMON_WORDS).
+const isCommonName = (name) => {
+  const t = (name || '').trim()
+  return !/\s/.test(t) && COMMON_WORDS.has(t.toLowerCase())
+}
+
 // Build a mask context from the catalog (db.readCatalog output).
 export function buildMask(catalog) {
   const fwd = new Map() // realName -> token
@@ -46,7 +70,8 @@ export function buildMask(catalog) {
   // "Redington Ltd.") still get masked. Skip corporate/stop words that aren't identifying.
   const STOP = new Set(['ltd', 'limited', 'pvt', 'private', 'llp', 'inc', 'co', 'company',
     'the', 'and', 'of', 'india', 'indian', 'services', 'solutions', 'technologies',
-    'enterprises', 'industries', 'corporation', 'group', 'trust', 'huf', 'sons'])
+    'enterprises', 'industries', 'corporation', 'group', 'trust', 'huf', 'sons',
+    ...COMMON_WORDS]) // never tokenise generic accounting words as a single name-word either
   const wordMap = new Map() // lowerword -> token (only if unambiguous)
   const seen = new Map()    // lowerword -> Set(token)
   for (const [name, tok] of fwd) {
@@ -71,9 +96,11 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 // Replace any real entity name appearing in the user's question with its token.
 export function maskQuestion(question, mask) {
   let q = question
-  // 1) full names first (most specific)
+  // 1) full names first (most specific). Skip names that ARE a single generic word
+  // ('Cash', 'Depreciation', 'Rent') — matching them as substrings corrupts ordinary questions
+  // and they carry no client identity.
   for (const name of mask.names) {
-    if (name.length < 3) continue
+    if (name.length < 3 || isCommonName(name)) continue
     q = q.replace(new RegExp(escapeRe(name), 'gi'), mask.fwd.get(name))
   }
   // 2) distinctive name-words, on word boundaries, skipping already-placed tokens
